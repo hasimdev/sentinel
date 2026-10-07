@@ -8,7 +8,10 @@ BOOTSTRAP := python3.12
 PY := .venv/bin/python
 endif
 
-.PHONY: dev test lint
+# Tag local runs with the current git commit unless one is already set.
+export COMMIT_SHA ?= $(shell git rev-parse --short HEAD)
+
+.PHONY: dev test lint run-shoplite
 
 dev:
 	$(BOOTSTRAP) -m venv .venv
@@ -21,3 +24,6 @@ test:
 
 lint:
 	$(PY) -m pre_commit run --all-files
+
+run-shoplite:
+	$(PY) -m uvicorn apps.shoplite.main:app --reload --port 8000

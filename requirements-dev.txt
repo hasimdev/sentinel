@@ -1,4 +1,6 @@
+-r apps/shoplite/requirements.txt
 pytest
+httpx2
 ruff
 black
 pre-commit
