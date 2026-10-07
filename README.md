@@ -15,3 +15,31 @@ make dev               # create .venv, install tools, enable pre-commit hooks
 make lint              # ruff, black, gitleaks
 make test              # pytest
 ```
+
+## Roadmap
+
+Agreed scope: see [docs/decisions/0001-core-demo-scope.md](docs/decisions/0001-core-demo-scope.md).
+
+| Step | Status |
+|---|---|
+| Repo foundation, quality and secret checks | Done |
+| ShopLite demo shop (tagged JSON logs, fault injection) | Done |
+| Metrics, Prometheus and Grafana dashboard | Done |
+| Logs in Grafana (Loki) | Next |
+| Alerts | |
+| Orchestrator | |
+| Read-only MCP tools | |
+| Claude triage agent | |
+| Evals | |
+| Slack: diagnosis + human approval | |
+
+Deferred: web dashboard, Jira, ServiceNow, Harness (rollback simulated first).
+
+## Monitoring locally
+
+```bash
+make infra-up        # Prometheus http://localhost:9090, Grafana http://localhost:3000
+make run-shoplite    # in one terminal
+make traffic         # in another; set SHOPLITE_FAIL_RATE=0.5 before run-shoplite to see errors
+make infra-down
+```
