@@ -7,6 +7,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from apps.shoplite.logging_setup import configure_logging
+from apps.shoplite.metrics import instrument
 from apps.shoplite.settings import Settings, load_settings
 
 
@@ -45,6 +46,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or load_settings()
     log = configure_logging(settings.tags())
     app = FastAPI(title="ShopLite", version=settings.version)
+    app.state.metrics_registry = instrument(app, settings.tags())
 
     @app.get("/health")
     def health() -> dict[str, str]:
