@@ -59,3 +59,35 @@ def test_dashboard_panels_use_known_datasources():
     assert 'level="ERROR"' in titles["Error logs"]["targets"][0]["expr"]
     for panel in dashboard["panels"]:
         assert panel["datasource"]["uid"] in {"prometheus", "loki"}
+
+
+def test_alerting_services_are_wired_together():
+    services = load_yaml("docker-compose.yml")["services"]
+    assert {"alertmanager", "alert-inbox"} <= services.keys()
+    assert "ports" not in services["alert-inbox"], "the inbox should not be reachable from the PC"
+
+    prometheus = load_yaml("prometheus/prometheus.yml")
+    targets = prometheus["alerting"]["alertmanagers"][0]["static_configs"][0]["targets"]
+    assert targets == ["alertmanager:9093"]
+
+    receiver = load_yaml("alertmanager/alertmanager.yml")["receivers"][0]
+    webhook = receiver["webhook_configs"][0]
+    assert webhook["url"] == "http://alert-inbox:8080/alerts"
+    assert webhook["send_resolved"] is True
+
+
+def test_high_error_rate_rule_matches_the_agreed_threshold():
+    rule = load_yaml("prometheus/rules/shoplite.yml")["groups"][0]["rules"][0]
+    assert rule["alert"] == "ShopLiteHighErrorRate"
+    assert rule["for"] == "1m"
+    assert "> 0.20" in rule["expr"]
+    for tag in ("service", "env", "version", "commit_sha"):
+        assert tag in rule["expr"], "alert must say which service/version/commit is failing"
+    assert rule["labels"]["severity"] == "critical"
+
+
+def test_dashboard_marks_firing_alerts():
+    dashboard = json.loads((INFRA / "grafana/dashboards/shoplite.json").read_text(encoding="utf-8"))
+    annotation = dashboard["annotations"]["list"][0]
+    assert "ShopLiteHighErrorRate" in annotation["expr"]
+    assert annotation["iconColor"] == "red"

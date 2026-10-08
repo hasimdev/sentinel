@@ -26,8 +26,8 @@ Agreed scope: see [docs/decisions/0001-core-demo-scope.md](docs/decisions/0001-c
 | ShopLite demo shop (tagged JSON logs, fault injection) | Done |
 | Metrics, Prometheus and Grafana dashboard | Done |
 | Logs in Grafana (Loki) | Done |
-| Alerts | Next |
-| Orchestrator | |
+| Alerts | Done |
+| Orchestrator | Next |
 | Read-only MCP tools | |
 | Claude triage agent | |
 | Evals | |
@@ -38,8 +38,9 @@ Deferred: web dashboard, Jira, ServiceNow, Harness (rollback simulated first).
 ## Monitoring locally
 
 ```bash
-make infra-up        # Prometheus http://localhost:9090, Grafana http://localhost:3000
+make infra-up        # Prometheus :9090, Grafana :3000, Loki :3100, Alertmanager :9093
 make run-shoplite    # in one terminal
 make traffic         # in another; set SHOPLITE_FAIL_RATE=0.5 before run-shoplite to see errors
+make alerts          # watch alerts arrive (fires after 1 min above 20% errors)
 make infra-down
 ```

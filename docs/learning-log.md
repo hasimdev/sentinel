@@ -36,3 +36,18 @@ Running notes on what I learned at each step.
   `{level="ERROR", commit_sha="f9892ad"}` = errors from one exact build.
 - Verified end to end: 108 failed checkouts produced exactly 108 ERROR lines in Loki.
 - `make infra-check` validates the configs with each tool's own checker before starting anything.
+
+## 2026-10-07 – Alerts
+- An **alert rule** is a saved question Prometheus asks every few seconds:
+  "is the error rate above 20%?" The **`for: 1m`** clause means it must stay true for a full
+  minute before firing, so a single blip doesn't wake anyone up.
+- Alert life cycle: **inactive → pending** (condition true, waiting out the minute) **→ firing →
+  resolved** (condition false again). Verified live: fired at 66 s, resolved ~1 min after errors stopped.
+- **Alertmanager** routes fired alerts to receivers (today: a tiny inbox; next: the orchestrator; later: Slack).
+  It batches related alerts and re-sends at most hourly, so people aren't spammed.
+- **`promtool test rules`** unit-tests an alert with fake data: fires at 40% errors,
+  stays quiet at 5% and with no traffic.
+- Lesson: a ShopLite left running from yesterday was still failing at 50% and blocked port 8000.
+  The alert even named its older commit (f9892ad), which is exactly the clue triage needs.
+  Stop servers with Ctrl+C when done.
+- Note: the RESOLVED message repeats the last measured error rate; that's normal for Alertmanager.

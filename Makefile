@@ -13,7 +13,7 @@ export COMMIT_SHA ?= $(shell git rev-parse --short HEAD)
 
 COMPOSE := docker compose -f infra/docker-compose.yml --env-file .env
 
-.PHONY: dev test lint run-shoplite traffic infra-up infra-down infra-check
+.PHONY: dev test lint run-shoplite traffic infra-up infra-down infra-check alerts
 
 dev:
 	$(BOOTSTRAP) -m venv .venv
@@ -37,7 +37,7 @@ traffic:
 
 infra-up:
 	$(COMPOSE) up -d
-	@echo Grafana: http://localhost:3000   Prometheus: http://localhost:9090   Loki: http://localhost:3100
+	@echo Grafana: http://localhost:3000   Prometheus: http://localhost:9090   Loki: http://localhost:3100   Alertmanager: http://localhost:9093
 
 infra-down:
 	$(COMPOSE) down
@@ -47,3 +47,10 @@ infra-check:
 	$(COMPOSE) config --quiet
 	$(COMPOSE) run --rm --no-deps loki -config.file=/etc/loki/loki.yml -verify-config
 	$(COMPOSE) run --rm --no-deps alloy validate /etc/alloy/config.alloy
+	$(COMPOSE) run --rm --no-deps --entrypoint promtool prometheus check config /etc/prometheus/prometheus.yml
+	$(COMPOSE) run --rm --no-deps --entrypoint promtool prometheus test rules /etc/prometheus/tests/shoplite_test.yml
+	$(COMPOSE) run --rm --no-deps --entrypoint amtool alertmanager check-config /etc/alertmanager/alertmanager.yml
+
+# Follow alerts as they arrive (Ctrl+C to stop watching).
+alerts:
+	$(COMPOSE) logs -f alert-inbox

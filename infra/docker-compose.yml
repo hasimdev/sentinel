@@ -10,10 +10,12 @@ services:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.retention.time=7d
     volumes:
-      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus:/etc/prometheus:ro  # config, alert rules and rule tests
       - prometheus-data:/prometheus
     ports:
       - "127.0.0.1:9090:9090"  # only reachable from this PC
+    depends_on:
+      - alertmanager
 
   grafana:
     image: grafana/grafana:12.1.0
@@ -54,8 +56,29 @@ services:
       - ../logs:/var/log/shoplite:ro
       - alloy-data:/var/lib/alloy/data
 
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+    volumes:
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+    ports:
+      - "127.0.0.1:9093:9093"
+    depends_on:
+      - alert-inbox
+
+  # Placeholder receiver for alerts until the orchestrator exists. Not published to the PC.
+  alert-inbox:
+    image: python:3.12.11-slim
+    command: ["python", "-u", "/app/inbox.py"]
+    volumes:
+      - ./alert-inbox/inbox.py:/app/inbox.py:ro
+
 volumes:
   prometheus-data:
   grafana-data:
   loki-data:
   alloy-data:
+  alertmanager-data:

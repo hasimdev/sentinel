@@ -1,0 +1,17 @@
+groups:
+  - name: shoplite
+    rules:
+      # Fires when more than 20% of requests fail (5xx) for a full minute.
+      # Grouped by the four tags, so the alert says which version / commit is failing.
+      - alert: ShopLiteHighErrorRate
+        expr: |
+          sum by (service, env, version, commit_sha) (rate(shoplite_http_requests_total{status=~"5.."}[1m]))
+            /
+          sum by (service, env, version, commit_sha) (rate(shoplite_http_requests_total[1m]))
+            > 0.20
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "ShopLite error rate is {{ $value | humanizePercentage }} on version {{ $labels.version }} ({{ $labels.commit_sha }})"
+          dashboard: "http://localhost:3000/d/shoplite"

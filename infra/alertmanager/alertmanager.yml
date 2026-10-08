@@ -1,0 +1,14 @@
+# Alertmanager decides where fired alerts go. For now: the local alert inbox.
+# Later the orchestrator replaces the inbox, and Slack comes after that.
+route:
+  receiver: alert-inbox
+  group_by: [alertname, service, env, version]
+  group_wait: 10s       # wait briefly to batch related alerts
+  group_interval: 1m
+  repeat_interval: 1h   # re-send a still-firing alert at most once an hour
+
+receivers:
+  - name: alert-inbox
+    webhook_configs:
+      - url: http://alert-inbox:8080/alerts
+        send_resolved: true

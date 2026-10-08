@@ -1,0 +1,50 @@
+# Run with: make infra-check  (uses promtool test rules)
+rule_files:
+  - ../rules/shoplite.yml
+
+evaluation_interval: 15s
+
+tests:
+  # 40% of requests fail -> pending at first, firing once it has lasted 1 minute.
+  - interval: 15s
+    input_series:
+      - series: 'shoplite_http_requests_total{service="shoplite",env="local",version="0.1.0",commit_sha="abc1234",method="POST",route="/checkout",status="200"}'
+        values: "0+90x20"
+      - series: 'shoplite_http_requests_total{service="shoplite",env="local",version="0.1.0",commit_sha="abc1234",method="POST",route="/checkout",status="503"}'
+        values: "0+60x20"
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: ShopLiteHighErrorRate
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: ShopLiteHighErrorRate
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: shoplite
+              env: local
+              version: "0.1.0"
+              commit_sha: abc1234
+            exp_annotations:
+              summary: "ShopLite error rate is 40% on version 0.1.0 (abc1234)"
+              dashboard: "http://localhost:3000/d/shoplite"
+
+  # 5% of requests fail -> below the 20% threshold, no alert.
+  - interval: 15s
+    input_series:
+      - series: 'shoplite_http_requests_total{service="shoplite",env="local",version="0.1.0",commit_sha="abc1234",method="POST",route="/checkout",status="200"}'
+        values: "0+95x20"
+      - series: 'shoplite_http_requests_total{service="shoplite",env="local",version="0.1.0",commit_sha="abc1234",method="POST",route="/checkout",status="503"}'
+        values: "0+5x20"
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: ShopLiteHighErrorRate
+        exp_alerts: []
+
+  # No traffic at all -> no alert (nothing to divide).
+  - interval: 15s
+    input_series: []
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: ShopLiteHighErrorRate
+        exp_alerts: []

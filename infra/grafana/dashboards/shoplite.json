@@ -204,5 +204,23 @@
         }
       ]
     }
-  ]
+  ],
+  "annotations": {
+    "list": [
+      {
+        "name": "Alerts firing",
+        "enable": true,
+        "iconColor": "red",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "expr": "ALERTS{alertname=\"ShopLiteHighErrorRate\", alertstate=\"firing\"}",
+        "step": "15s",
+        "titleFormat": "{{alertname}}",
+        "textFormat": "version {{version}} ({{commit_sha}})",
+        "useValueForTime": false
+      }
+    ]
+  }
 }
