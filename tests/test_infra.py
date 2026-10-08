@@ -71,9 +71,12 @@ def test_alerting_services_are_wired_together():
     assert targets == ["alertmanager:9093"]
 
     receiver = load_yaml("alertmanager/alertmanager.yml")["receivers"][0]
-    webhook = receiver["webhook_configs"][0]
-    assert webhook["url"] == "http://alert-inbox:8080/alerts"
-    assert webhook["send_resolved"] is True
+    urls = {w["url"]: w for w in receiver["webhook_configs"]}
+    assert set(urls) == {
+        "http://host.docker.internal:8001/alerts",  # orchestrator
+        "http://alert-inbox:8080/alerts",
+    }
+    assert all(w["send_resolved"] is True for w in urls.values())
 
 
 def test_high_error_rate_rule_matches_the_agreed_threshold():

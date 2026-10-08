@@ -1,14 +1,17 @@
-# Alertmanager decides where fired alerts go. For now: the local alert inbox.
-# Later the orchestrator replaces the inbox, and Slack comes after that.
+# Alertmanager decides where fired alerts go:
+#  - the orchestrator (runs on the PC, port 8001) opens incidents and gathers evidence
+#  - the alert inbox keeps a simple printed log of every alert (see `make alerts`)
 route:
-  receiver: alert-inbox
+  receiver: sentinel
   group_by: [alertname, service, env, version]
   group_wait: 10s       # wait briefly to batch related alerts
   group_interval: 1m
   repeat_interval: 1h   # re-send a still-firing alert at most once an hour
 
 receivers:
-  - name: alert-inbox
+  - name: sentinel
     webhook_configs:
+      - url: http://host.docker.internal:8001/alerts
+        send_resolved: true
       - url: http://alert-inbox:8080/alerts
         send_resolved: true

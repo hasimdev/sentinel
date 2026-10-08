@@ -27,8 +27,8 @@ Agreed scope: see [docs/decisions/0001-core-demo-scope.md](docs/decisions/0001-c
 | Metrics, Prometheus and Grafana dashboard | Done |
 | Logs in Grafana (Loki) | Done |
 | Alerts | Done |
-| Orchestrator | Next |
-| Read-only MCP tools | |
+| Orchestrator | Done |
+| Read-only MCP tools | Next |
 | Claude triage agent | |
 | Evals | |
 | Slack: diagnosis + human approval | |
@@ -42,5 +42,7 @@ make infra-up        # Prometheus :9090, Grafana :3000, Loki :3100, Alertmanager
 make run-shoplite    # in one terminal
 make traffic         # in another; set SHOPLITE_FAIL_RATE=0.5 before run-shoplite to see errors
 make alerts          # watch alerts arrive (fires after 1 min above 20% errors)
+make run-orchestrator  # in another terminal: turns alerts into incidents (port 8001)
+make incidents       # list incidents with their evidence
 make infra-down
 ```

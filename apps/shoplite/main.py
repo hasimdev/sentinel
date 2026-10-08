@@ -6,9 +6,9 @@ import uuid
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-from apps.shoplite.logging_setup import configure_logging
 from apps.shoplite.metrics import instrument
 from apps.shoplite.settings import Settings, load_settings
+from common.logging_setup import configure_logging
 
 
 class Product(BaseModel):

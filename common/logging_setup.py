@@ -1,4 +1,4 @@
-"""Structured JSON logging: every line carries service, env, version and commit_sha."""
+"""Shared structured JSON logging: every line carries service, env, version and commit_sha."""
 
 import json
 import logging
@@ -37,9 +37,11 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(payload)
 
 
-def configure_logging(tags: dict[str, str], log_file: str | None = None) -> logging.Logger:
+def configure_logging(
+    tags: dict[str, str], log_file: str | None = None, name: str = "shoplite"
+) -> logging.Logger:
     """Log JSON to the terminal and, if log_file is set, also to that file (for Loki)."""
-    logger = logging.getLogger("shoplite")
+    logger = logging.getLogger(name)
     logger.setLevel(logging.INFO)
     for old in logger.handlers:
         old.close()

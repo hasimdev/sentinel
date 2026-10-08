@@ -1,4 +1,5 @@
 -r apps/shoplite/requirements.txt
+-r orchestrator/requirements.txt
 pytest
 httpx2
 pyyaml

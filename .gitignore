@@ -10,6 +10,9 @@ __pycache__/
 
 # Local app logs (shipped to Loki, never committed)
 logs/
+
+# Local databases (incidents etc.)
+data/
 venv/
 *.egg-info/
 build/

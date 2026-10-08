@@ -5,9 +5,9 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
-from apps.shoplite.logging_setup import JsonFormatter
 from apps.shoplite.main import create_app
 from apps.shoplite.settings import Settings, load_settings
+from common.logging_setup import JsonFormatter
 
 TAGS = {"service": "shoplite", "env": "test", "version": "9.9.9", "commit_sha": "abc1234"}
 

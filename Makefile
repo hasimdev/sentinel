@@ -13,7 +13,7 @@ export COMMIT_SHA ?= $(shell git rev-parse --short HEAD)
 
 COMPOSE := docker compose -f infra/docker-compose.yml --env-file .env
 
-.PHONY: dev test lint run-shoplite traffic infra-up infra-down infra-check alerts
+.PHONY: dev test lint run-shoplite traffic infra-up infra-down infra-check alerts run-orchestrator incidents
 
 dev:
 	$(BOOTSTRAP) -m venv .venv
@@ -31,6 +31,15 @@ lint:
 run-shoplite: export SHOPLITE_LOG_FILE ?= logs/shoplite.log
 run-shoplite:
 	$(PY) -m uvicorn apps.shoplite.main:app --reload --port 8000
+
+# Receives alerts on port 8001, opens incidents. Logs also go to Loki.
+run-orchestrator: export ORCHESTRATOR_LOG_FILE ?= logs/orchestrator.log
+run-orchestrator:
+	$(PY) -m uvicorn orchestrator.main:create_app --factory --reload --port 8001
+
+# Print the incidents the orchestrator has recorded.
+incidents:
+	$(PY) -c "import json, urllib.request; print(json.dumps(json.load(urllib.request.urlopen('http://127.0.0.1:8001/incidents')), indent=2))"
 
 traffic:
 	$(PY) -m apps.shoplite.traffic --rps 5

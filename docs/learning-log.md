@@ -51,3 +51,18 @@ Running notes on what I learned at each step.
   The alert even named its older commit (f9892ad), which is exactly the clue triage needs.
   Stop servers with Ctrl+C when done.
 - Note: the RESOLVED message repeats the last measured error rate; that's normal for Alertmanager.
+
+## 2026-10-08 – Orchestrator
+- An **alert** is a signal; an **incident** is the record we manage: it has an ID, a status
+  (open → resolved), and the **evidence** needed to diagnose it.
+- **De-duplication**: Alertmanager re-sends a firing alert; each alert has a *fingerprint*, so a
+  repeat updates the open incident instead of creating a new one.
+- **Adapters** (`MetricSource`, `LogSource`) hide *which* tool we use. Swapping Prometheus for
+  Datadog later means writing one new adapter, not rewriting the orchestrator. Ours are
+  read-only: HTTP GET queries only.
+- **Graceful degradation**: if Loki or Prometheus is down, the incident still opens and the
+  missing pieces are listed under `gaps`.
+- Live run: incident opened 91 s after errors began, with error rate 36%, 20 error log lines,
+  scoped to commit d7b289c; resolved automatically ~2 min after errors stopped.
+- Lesson: `uvicorn --reload` runs a hidden worker process. Stopping only the parent leaves
+  the worker serving. Stop with Ctrl+C in its window, or kill the whole process tree.
