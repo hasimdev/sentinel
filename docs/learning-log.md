@@ -26,3 +26,13 @@ Running notes on what I learned at each step.
   Containers reach programs on the PC via `host.docker.internal`.
 - Gotcha: on Windows, `localhost` tries IPv6 first; ShopLite listens on IPv4 only, so use `127.0.0.1` to avoid 2 s delays.
 - Gotcha: starting `make run-shoplite` in several windows leaves several servers fighting over port 8000.
+
+## 2026-10-07 – Logs in Grafana (Loki)
+- **Metrics say *that* something broke; logs say *what* broke.** The error-rate chart and the
+  error-log panel now sit on the same dashboard.
+- **Loki** stores log lines and indexes only a few **labels** (service, env, version,
+  commit_sha, level), which keeps it cheap. **Alloy** tails `logs/shoplite.log` and ships each line.
+- **LogQL** examples: `{service="shoplite", level="ERROR"}` = all error lines;
+  `{level="ERROR", commit_sha="f9892ad"}` = errors from one exact build.
+- Verified end to end: 108 failed checkouts produced exactly 108 ERROR lines in Loki.
+- `make infra-check` validates the configs with each tool's own checker before starting anything.

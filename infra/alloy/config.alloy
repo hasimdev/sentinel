@@ -1,0 +1,48 @@
+// Alloy reads ShopLite's JSON log file and ships each line to Loki.
+
+local.file_match "shoplite" {
+  path_targets = [{"__path__" = "/var/log/shoplite/*.log", "job" = "shoplite"}]
+}
+
+loki.source.file "shoplite" {
+  targets    = local.file_match.shoplite.targets
+  forward_to = [loki.process.shoplite.receiver]
+}
+
+// Turn the standard tags into Loki labels so searches like {level="ERROR"} are fast,
+// and use ShopLite's own timestamp instead of the time Alloy read the line.
+loki.process "shoplite" {
+  stage.json {
+    expressions = {
+      ts         = "",
+      level      = "",
+      service    = "",
+      env        = "",
+      version    = "",
+      commit_sha = "",
+    }
+  }
+
+  stage.labels {
+    values = {
+      level      = "",
+      service    = "",
+      env        = "",
+      version    = "",
+      commit_sha = "",
+    }
+  }
+
+  stage.timestamp {
+    source = "ts"
+    format = "RFC3339Nano"
+  }
+
+  forward_to = [loki.write.local.receiver]
+}
+
+loki.write "local" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

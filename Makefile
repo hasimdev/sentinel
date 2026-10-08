@@ -13,7 +13,7 @@ export COMMIT_SHA ?= $(shell git rev-parse --short HEAD)
 
 COMPOSE := docker compose -f infra/docker-compose.yml --env-file .env
 
-.PHONY: dev test lint run-shoplite traffic infra-up infra-down
+.PHONY: dev test lint run-shoplite traffic infra-up infra-down infra-check
 
 dev:
 	$(BOOTSTRAP) -m venv .venv
@@ -27,6 +27,8 @@ test:
 lint:
 	$(PY) -m pre_commit run --all-files
 
+# Also write logs to a file so Alloy can ship them to Loki.
+run-shoplite: export SHOPLITE_LOG_FILE ?= logs/shoplite.log
 run-shoplite:
 	$(PY) -m uvicorn apps.shoplite.main:app --reload --port 8000
 
@@ -35,7 +37,13 @@ traffic:
 
 infra-up:
 	$(COMPOSE) up -d
-	@echo Grafana: http://localhost:3000   Prometheus: http://localhost:9090
+	@echo Grafana: http://localhost:3000   Prometheus: http://localhost:9090   Loki: http://localhost:3100
 
 infra-down:
 	$(COMPOSE) down
+
+# Validate the stack's config files with each tool's own checker.
+infra-check:
+	$(COMPOSE) config --quiet
+	$(COMPOSE) run --rm --no-deps loki -config.file=/etc/loki/loki.yml -verify-config
+	$(COMPOSE) run --rm --no-deps alloy validate /etc/alloy/config.alloy

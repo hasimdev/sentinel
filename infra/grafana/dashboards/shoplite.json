@@ -171,6 +171,38 @@
           "legendFormat": "{{route}}"
         }
       ]
+    },
+    {
+      "id": 4,
+      "type": "logs",
+      "title": "Error logs",
+      "description": "ShopLite log lines with level ERROR (from Loki). Expand a line to see version and commit_sha.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 18,
+        "w": 24,
+        "h": 10
+      },
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "sortOrder": "Descending",
+        "enableLogDetails": true
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "{service=\"shoplite\", level=\"ERROR\"}"
+        }
+      ]
     }
   ]
 }

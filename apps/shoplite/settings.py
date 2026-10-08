@@ -11,6 +11,7 @@ ENV_VARS = {
     "VERSION": "version",
     "COMMIT_SHA": "commit_sha",
     "SHOPLITE_FAIL_RATE": "fail_rate",
+    "SHOPLITE_LOG_FILE": "log_file",
 }
 
 
@@ -21,6 +22,8 @@ class Settings(BaseModel):
     commit_sha: str = "unknown"
     # Share of checkouts that fail on purpose (0 = never, 1 = always).
     fail_rate: float = Field(default=0.0, ge=0.0, le=1.0)
+    # Optional file to also write JSON logs to; Alloy ships it to Loki.
+    log_file: str | None = None
 
     def tags(self) -> dict[str, str]:
         """The four tags every log, metric and deploy must carry."""

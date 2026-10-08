@@ -3,6 +3,7 @@
 import json
 import logging
 from datetime import UTC, datetime
+from pathlib import Path
 
 TAG_FIELDS = ("service", "env", "version", "commit_sha")
 
@@ -36,14 +37,21 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(payload)
 
 
-def configure_logging(tags: dict[str, str]) -> logging.Logger:
+def configure_logging(tags: dict[str, str], log_file: str | None = None) -> logging.Logger:
+    """Log JSON to the terminal and, if log_file is set, also to that file (for Loki)."""
     logger = logging.getLogger("shoplite")
     logger.setLevel(logging.INFO)
+    for old in logger.handlers:
+        old.close()
     logger.handlers.clear()
     logger.filters.clear()
 
-    handler = logging.StreamHandler()
-    handler.setFormatter(JsonFormatter())
-    logger.addHandler(handler)
+    handlers: list[logging.Handler] = [logging.StreamHandler()]
+    if log_file:
+        Path(log_file).parent.mkdir(parents=True, exist_ok=True)
+        handlers.append(logging.FileHandler(log_file, encoding="utf-8"))
+    for handler in handlers:
+        handler.setFormatter(JsonFormatter())
+        logger.addHandler(handler)
     logger.addFilter(TagFilter(tags))
     return logger

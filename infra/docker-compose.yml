@@ -1,5 +1,6 @@
 # Local monitoring stack. Start with `make infra-up`, stop with `make infra-down`.
-# ShopLite itself runs on your PC (make run-shoplite); Prometheus reaches it via host.docker.internal.
+# ShopLite itself runs on your PC (make run-shoplite); Prometheus reaches it via host.docker.internal,
+# and Alloy reads the log file it writes to ../logs.
 name: sentinel
 
 services:
@@ -18,6 +19,7 @@ services:
     image: grafana/grafana:12.1.0
     depends_on:
       - prometheus
+      - loki
     environment:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?Set GRAFANA_ADMIN_PASSWORD in .env}
       GF_AUTH_ANONYMOUS_ENABLED: "true"  # view dashboards without logging in (local only)
@@ -30,6 +32,30 @@ services:
     ports:
       - "127.0.0.1:3000:3000"
 
+  loki:
+    image: grafana/loki:3.5.3
+    command: -config.file=/etc/loki/loki.yml
+    volumes:
+      - ./loki/loki.yml:/etc/loki/loki.yml:ro
+      - loki-data:/loki
+    ports:
+      - "127.0.0.1:3100:3100"
+
+  alloy:
+    image: grafana/alloy:v1.10.1
+    command:
+      - run
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    depends_on:
+      - loki
+    volumes:
+      - ./alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - ../logs:/var/log/shoplite:ro
+      - alloy-data:/var/lib/alloy/data
+
 volumes:
   prometheus-data:
   grafana-data:
+  loki-data:
+  alloy-data:

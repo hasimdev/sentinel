@@ -44,7 +44,7 @@ _rng = secrets.SystemRandom()
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or load_settings()
-    log = configure_logging(settings.tags())
+    log = configure_logging(settings.tags(), settings.log_file)
     app = FastAPI(title="ShopLite", version=settings.version)
     app.state.metrics_registry = instrument(app, settings.tags())
 

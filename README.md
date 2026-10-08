@@ -25,8 +25,8 @@ Agreed scope: see [docs/decisions/0001-core-demo-scope.md](docs/decisions/0001-c
 | Repo foundation, quality and secret checks | Done |
 | ShopLite demo shop (tagged JSON logs, fault injection) | Done |
 | Metrics, Prometheus and Grafana dashboard | Done |
-| Logs in Grafana (Loki) | Next |
-| Alerts | |
+| Logs in Grafana (Loki) | Done |
+| Alerts | Next |
 | Orchestrator | |
 | Read-only MCP tools | |
 | Claude triage agent | |
