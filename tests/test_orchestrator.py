@@ -58,7 +58,8 @@ def db_path(tmp_path):
 
 
 def make_client(db_path, metrics=None, logs=None) -> TestClient:
-    settings = Settings(env="test", commit_sha="test123", db_path=db_path)
+    # triage off: these tests must never call the real Anthropic API
+    settings = Settings(env="test", commit_sha="test123", db_path=db_path, triage_enabled=False)
     return TestClient(create_app(settings, metrics or FakeMetrics(), logs or FakeLogs()))
 
 

@@ -7,7 +7,8 @@ import pytest
 from mcp.client import Client
 
 from mcp_server.incidents import OrchestratorIncidentSource
-from mcp_server.server import MAX_LOG_LINES, MAX_LOG_MINUTES, MAX_SERIES, build_server
+from mcp_server.server import build_server
+from mcp_server.tools import MAX_LOG_LINES, MAX_LOG_MINUTES, MAX_SERIES
 from orchestrator.adapters.base import AdapterError, MetricSeries
 from orchestrator.models import Evidence, Incident, LogLine
 

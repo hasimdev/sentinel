@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 
 from orchestrator.adapters.base import LogSource, MetricSource
 from orchestrator.evidence import gather_evidence
-from orchestrator.models import Alert, AlertmanagerWebhook, Incident
+from orchestrator.models import Alert, AlertmanagerWebhook, Incident, TriageResult
 from orchestrator.store import IncidentStore
 
 
@@ -19,12 +19,20 @@ class WebhookResult(BaseModel):
 
 class IncidentService:
     def __init__(
-        self, store: IncidentStore, metrics: MetricSource, logs: LogSource, log: logging.Logger
+        self,
+        store: IncidentStore,
+        metrics: MetricSource,
+        logs: LogSource,
+        log: logging.Logger,
+        triage_agent=None,
+        triage_skip_reason: str = "AI triage is turned off",
     ) -> None:
         self.store = store
         self.metrics = metrics
         self.logs = logs
         self.log = log
+        self.triage_agent = triage_agent
+        self.triage_skip_reason = triage_skip_reason
 
     def handle(self, webhook: AlertmanagerWebhook) -> WebhookResult:
         result = WebhookResult()
@@ -63,6 +71,37 @@ class IncidentService:
             error_logs=len(evidence.error_logs),
             gaps=len(evidence.gaps),
         )
+
+    def run_triage(self, incident_id: int) -> None:
+        """Ask the AI for a diagnosis. Never raises; the outcome is stored on the incident."""
+        incident = self.store.get(incident_id)
+        if incident is None:
+            return
+        if self.triage_agent is None:
+            result = TriageResult(status="skipped", error=self.triage_skip_reason)
+        else:
+            try:
+                result = self.triage_agent.triage(incident)
+            except Exception as exc:  # a bug in triage must never break incident handling
+                result = TriageResult(status="failed", error=f"Unexpected error: {exc}")
+        incident = self.store.get(incident_id)  # re-read: may have changed meanwhile
+        incident.triage = result
+        self.store.save(incident)
+        diagnosis = result.diagnosis
+        self._log(
+            "triage finished",
+            incident,
+            triage_status=result.status,
+            recommendation=diagnosis.recommendation if diagnosis else None,
+            confidence=diagnosis.confidence if diagnosis else None,
+            tool_calls=len(result.tool_calls),
+            triage_error=result.error,
+        )
+
+    def investigate(self, incident_id: int) -> None:
+        """Background job for a new incident: gather evidence, then AI triage."""
+        self.attach_evidence(incident_id)
+        self.run_triage(incident_id)
 
     @staticmethod
     def _new_incident(alert: Alert) -> Incident:

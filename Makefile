@@ -35,7 +35,7 @@ run-shoplite:
 # Receives alerts on port 8001, opens incidents. Logs also go to Loki.
 run-orchestrator: export ORCHESTRATOR_LOG_FILE ?= logs/orchestrator.log
 run-orchestrator:
-	$(PY) -m uvicorn orchestrator.main:create_app --factory --reload --port 8001
+	$(PY) -m uvicorn orchestrator.main:create_app --factory --reload --port 8001 --env-file .env
 
 # Print the incidents the orchestrator has recorded.
 incidents:

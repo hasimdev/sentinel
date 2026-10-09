@@ -13,3 +13,14 @@ FastAPI service (port 8001) that turns alerts into incidents with evidence attac
 - Incidents are stored in SQLite (`data/orchestrator.db`, gitignored).
 
 Run: `make run-orchestrator`, then open http://127.0.0.1:8001/docs or run `make incidents`.
+
+## AI triage
+
+After the evidence is gathered, `triage.py` asks Claude (Opus 5.5 by default) to investigate
+with the same four read-only tools as the MCP server, and stores a diagnosis on the incident
+(`triage`: cause, recommendation, reasoning, confidence, evidence, tools used, tokens).
+
+- Needs `ANTHROPIC_API_KEY` in `.env` (`make run-orchestrator` loads it). Without it,
+  triage is recorded as `skipped`. `TRIAGE_ENABLED=false` turns it off.
+- Limits: 12 look-ups and 8 rounds per incident. Failures are recorded, never raised.
+- Typical cost: about $0.20 per incident (measured: 46k input, 1.5k output tokens).

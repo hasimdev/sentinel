@@ -81,3 +81,21 @@ Running notes on what I learned at each step.
 - `.mcp.json` tells Claude Code how to start the server; Claude Code asks you to approve it
   the first time a session starts in this folder.
 - The folder is `mcp_server/`, not `mcp/`: a folder named `mcp` would hide the official library.
+
+## 2026-10-09 – AI triage agent
+- When an incident opens, the orchestrator gathers evidence and then asks **Claude Opus 5.5**
+  to investigate with the four read-only tools. Claude returns a structured diagnosis:
+  likely cause, recommendation (rollback / investigate / no_action), reasoning, confidence,
+  evidence. It is stored on the incident; a human decides.
+- **Guardrails**: only the four look-up tools (unknown tools are refused), max 12 look-ups and
+  8 rounds per incident, and every failure (no key, no credit, rate limit, refusal, bad answer)
+  is recorded on the incident instead of breaking it. Tests use a simulated Claude: free.
+- **Live result** (incident at 38% errors): 5 look-ups, 21 seconds, $0.21. Claude noticed every
+  error said "injected fault", that fail_rate=0.5 was set at every startup, and that the
+  *previous* commit failed just as much, so it recommended **investigate, not rollback**,
+  because rolling back wouldn't help. That's the kind of judgement a simple rule would miss.
+- Cost: Opus 5.5 is $4 per million input tokens and $20 per million output. Most of the cost is
+  input: each round re-sends the conversation, including tool results.
+- Lessons from the first attempts: an API key must be copied whole (about 100 characters);
+  the API account needs its own credit, separate from a Claude subscription; and Docker
+  Desktop can freeze, in which case restart it.

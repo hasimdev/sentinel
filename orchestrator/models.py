@@ -35,6 +35,27 @@ class Evidence(BaseModel):
     gaps: list[str] = Field(default_factory=list)
 
 
+# --- The AI's investigation (a recommendation only; a human decides) ---
+class Diagnosis(BaseModel):
+    likely_cause: str
+    recommendation: Literal["rollback", "investigate", "no_action"]
+    reasoning: str
+    confidence: Literal["high", "medium", "low"]
+    evidence: list[str]
+
+
+class TriageResult(BaseModel):
+    status: Literal["completed", "failed", "skipped"]
+    diagnosis: Diagnosis | None = None
+    error: str | None = None
+    model: str | None = None
+    tool_calls: list[str] = Field(default_factory=list)
+    input_tokens: int = 0
+    output_tokens: int = 0
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
 # --- Our record of an incident ---
 class Incident(BaseModel):
     id: int | None = None
@@ -51,3 +72,4 @@ class Incident(BaseModel):
     last_seen_at: datetime
     resolved_at: datetime | None = None
     evidence: Evidence | None = None
+    triage: TriageResult | None = None

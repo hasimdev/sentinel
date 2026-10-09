@@ -13,6 +13,7 @@ ENV_VARS = {
     "LOKI_URL": "loki_url",
     "ORCHESTRATOR_DB_PATH": "db_path",
     "ORCHESTRATOR_LOG_FILE": "log_file",
+    "TRIAGE_ENABLED": "triage_enabled",
 }
 
 
@@ -26,6 +27,8 @@ class Settings(BaseModel):
     loki_url: str = "http://127.0.0.1:3100"
     db_path: str = "data/orchestrator.db"
     log_file: str | None = None
+    # AI triage runs when this is on AND an Anthropic API key is available.
+    triage_enabled: bool = True
 
     def tags(self) -> dict[str, str]:
         """The four tags every log, metric and deploy must carry."""

@@ -29,8 +29,8 @@ Agreed scope: see [docs/decisions/0001-core-demo-scope.md](docs/decisions/0001-c
 | Alerts | Done |
 | Orchestrator | Done |
 | Read-only MCP tools | Done |
-| Claude triage agent | Next |
-| Evals | |
+| Claude triage agent | Done |
+| Evals | Next |
 | Slack: diagnosis + human approval | |
 
 Deferred: web dashboard, Jira, ServiceNow, Harness (rollback simulated first).
