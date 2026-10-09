@@ -35,3 +35,10 @@ yarn-error.log*
 .idea/
 .DS_Store
 Thumbs.db
+
+# Eval run output (regenerated; traces can be large)
+.claude/hillclimb/**/traces/
+.claude/hillclimb/**/report.html
+.claude/hillclimb/**/state.json
+.claude/hillclimb/**/trajectory/
+.claude/hillclimb/**/harness_approval.json

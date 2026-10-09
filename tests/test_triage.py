@@ -44,6 +44,7 @@ def tool_reply(*calls: tuple[str, dict]) -> SimpleNamespace:
 
 def reply(content, stop_reason) -> SimpleNamespace:
     return SimpleNamespace(
+        model="claude-opus-5-5",
         content=content,
         stop_reason=stop_reason,
         usage=SimpleNamespace(input_tokens=1000, output_tokens=200),
@@ -147,6 +148,15 @@ def test_request_shape_is_safe_and_structured():
     assert "tool_choice" not in req  # forced tool choice is rejected on this model
     first = req["messages"][0]["content"]
     assert "Incident #7" in first and "commit_sha=abc1234" in first
+    assert "Incident started: 2026-10-08T10:00:00+00:00" in first
+    assert "Current time: " in first
+
+
+def test_current_time_can_be_set():
+    claude = FakeClaude(text_reply(DIAGNOSIS))
+    later = datetime(2026, 10, 8, 10, 30, tzinfo=UTC)
+    TriageAgent(toolbox([]), client=claude).triage(incident(), now=later)
+    assert "Current time: 2026-10-08T10:30:00+00:00" in claude.requests[0]["messages"][0]["content"]
 
 
 def test_the_agent_only_has_the_four_read_only_tools():

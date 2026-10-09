@@ -1,0 +1,30 @@
+{
+  "metrics": [
+    {
+      "id": "rec_correct",
+      "label": "Right call",
+      "kind": "binary"
+    },
+    {
+      "id": "cause_correct",
+      "label": "Right cause",
+      "kind": "binary"
+    },
+    {
+      "id": "false_rollback",
+      "label": "Wrong rollback",
+      "kind": "binary",
+      "better": "lower"
+    }
+  ],
+  "perf_fields": [
+    {
+      "id": "latency_s",
+      "label": "Time (s)"
+    },
+    {
+      "id": "tool_calls",
+      "label": "Look-ups"
+    }
+  ]
+}

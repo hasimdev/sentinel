@@ -52,6 +52,8 @@ How to investigate:
   "investigate" when the cause is unclear or not release-related, and "no_action" when the
   problem has already cleared.
 - Base confidence on the evidence you actually saw. Say so if evidence was missing.
+- Compare timestamps with the current time given in the request to tell whether the problem
+  is still happening or has already cleared.
 
 Metric names: shoplite_http_requests_total (labels: route, status, method, plus the four
 tags) and shoplite_http_request_duration_seconds_bucket. Log labels: service, env, version,
@@ -122,12 +124,15 @@ class TriageAgent:
         self.toolbox = toolbox
         self.client = client or anthropic.Anthropic(timeout=REQUEST_TIMEOUT_S, max_retries=2)
         self.log = log or logging.getLogger("orchestrator")
+        # The last investigation's full conversation (for evals and debugging).
+        self.last_messages: list[dict] = []
 
-    def triage(self, incident: Incident) -> TriageResult:
+    def triage(self, incident: Incident, now: datetime | None = None) -> TriageResult:
+        """`now` is the current time the agent is told (defaults to the real clock)."""
         started = datetime.now(UTC)
         result = TriageResult(status="failed", model=MODEL, started_at=started, finished_at=started)
         try:
-            result.diagnosis = self._investigate(incident, result)
+            result.diagnosis = self._investigate(incident, result, now or started)
             result.status = "completed"
         except anthropic.AuthenticationError:
             result.error = "Anthropic API key missing or invalid (set ANTHROPIC_API_KEY in .env)"
@@ -142,18 +147,21 @@ class TriageAgent:
         result.finished_at = datetime.now(UTC)
         return result
 
-    def _investigate(self, incident: Incident, result: TriageResult) -> Diagnosis:
+    def _investigate(self, incident: Incident, result: TriageResult, now: datetime) -> Diagnosis:
         messages = [
             {
                 "role": "user",
                 "content": (
-                    f"Incident #{incident.id} just opened: {incident.summary or incident.alertname}"
+                    f"Incident #{incident.id}: {incident.summary or incident.alertname}"
                     f"\nservice={incident.service} env={incident.env} "
                     f"version={incident.version} commit_sha={incident.commit_sha}"
+                    f"\nIncident started: {incident.started_at.isoformat()}"
+                    f"\nCurrent time: {now.isoformat()}"
                     "\nInvestigate it and give your diagnosis."
                 ),
             }
         ]
+        self.last_messages = messages
         for _turn in range(MAX_TURNS):
             response = self.client.beta.messages.create(
                 model=MODEL,
@@ -171,6 +179,7 @@ class TriageAgent:
             )
             result.input_tokens += response.usage.input_tokens
             result.output_tokens += response.usage.output_tokens
+            result.model = response.model  # the model that actually answered
 
             if response.stop_reason == "refusal":
                 raise TriageError("Claude declined to analyse this incident")

@@ -99,3 +99,20 @@ Running notes on what I learned at each step.
 - Lessons from the first attempts: an API key must be copied whole (about 100 characters);
   the API account needs its own credit, separate from a Claude subscription; and Docker
   Desktop can freeze, in which case restart it.
+
+## 2026-10-09 – Evals: testing the AI's judgement
+- An **eval** is an exam with an answer key: 16 practice incidents (5 rollback,
+  7 investigate, 4 no action), each a scripted world of deploys, traffic, errors and logs.
+  The real AI investigates each one; we score the call and the cause.
+- **Marking:** the recommendation is checked automatically; an AI marker (Claude Sonnet 5.5,
+  a different model) judges the cause. It was tested first on four sample answers (empty,
+  "I don't know", confidently wrong, correct but reworded) and marked all four right.
+- **The pilot paid for itself:** the first small run found that the AI didn't know the
+  current time, so it couldn't tell "already fixed" from "just happened". The fix (tell it
+  the time) took the "blip that cleared" case from wrong to right.
+- **Half the "AI mistakes" were test bugs:** twice the AI was right about my scripted data
+  (metrics ignored the time window; a traffic "surge" that never rose). Always read a failing
+  answer before blaming the AI.
+- **Final baseline:** right call 32/32, right cause 32/32, no wrong rollbacks, about 18 s and
+  $0.19 per diagnosis. At 100% the test can't show further gains, so add harder cases first.
+- A **safety gate** stops the test after its code changes until a person re-approves it.
