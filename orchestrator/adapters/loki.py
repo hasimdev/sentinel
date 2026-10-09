@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 import httpx2
 
-from orchestrator.adapters.base import AdapterError
+from orchestrator.adapters.base import AdapterError, explain_http_error
 from orchestrator.models import LogLine
 
 
@@ -21,7 +21,8 @@ class LokiLogSource:
         }
         try:
             resp = self._client.get("/loki/api/v1/query_range", params=params)
-            resp.raise_for_status()
+            if resp.is_error:
+                raise AdapterError(explain_http_error("Loki", resp))
             body = resp.json()
         except (httpx2.HTTPError, ValueError) as exc:
             raise AdapterError(f"Loki query failed: {exc}") from exc

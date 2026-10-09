@@ -44,6 +44,29 @@ def test_prometheus_instant_returns_number_and_only_reads():
     assert seen[0].url.params["query"] == "up"
 
 
+def test_prometheus_query_returns_every_labelled_series():
+    body = {
+        "status": "success",
+        "data": {
+            "resultType": "vector",
+            "result": [
+                {"metric": {"version": "0.1.0"}, "value": [0, "0.37"]},
+                {"metric": {"version": "0.2.0"}, "value": [0, "NaN"]},
+                {"metric": {"version": "0.3.0"}, "value": [0, "0"]},
+            ],
+        },
+    }
+    transport, _ = fake_server(lambda r: httpx2.Response(200, json=body))
+    series = PrometheusMetricSource("http://prom", transport=transport).query("x")
+    assert [(s.labels["version"], s.value) for s in series] == [("0.1.0", 0.37), ("0.3.0", 0.0)]
+
+
+def test_prometheus_scalar_result():
+    body = {"status": "success", "data": {"resultType": "scalar", "result": [0, "2"]}}
+    transport, _ = fake_server(lambda r: httpx2.Response(200, json=body))
+    assert PrometheusMetricSource("http://prom", transport=transport).instant("1+1") == 2.0
+
+
 def test_prometheus_no_data_or_nan_is_none():
     empty = {"status": "success", "data": {"result": []}}
     transport, _ = fake_server(lambda r: httpx2.Response(200, json=empty))
@@ -64,6 +87,19 @@ def test_prometheus_failures_become_adapter_errors(response):
     transport, _ = fake_server(lambda r: response)
     with pytest.raises(AdapterError):
         PrometheusMetricSource("http://prom", transport=transport).instant("x")
+
+
+def test_prometheus_query_errors_explain_what_is_wrong():
+    body = {"status": "error", "errorType": "bad_data", "error": "parse error: unclosed paren"}
+    transport, _ = fake_server(lambda r: httpx2.Response(400, json=body))
+    with pytest.raises(AdapterError, match="unclosed paren"):
+        PrometheusMetricSource("http://prom", transport=transport).instant("sum((")
+
+
+def test_loki_query_errors_explain_what_is_wrong():
+    transport, _ = fake_server(lambda r: httpx2.Response(400, text="parse error: unexpected }"))
+    with pytest.raises(AdapterError, match="unexpected }"):
+        LokiLogSource("http://loki", transport=transport).search("}", timedelta(1), limit=1)
 
 
 def test_prometheus_unreachable_becomes_adapter_error():

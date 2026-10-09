@@ -66,3 +66,18 @@ Running notes on what I learned at each step.
   scoped to commit d7b289c; resolved automatically ~2 min after errors stopped.
 - Lesson: `uvicorn --reload` runs a hidden worker process. Stopping only the parent leaves
   the worker serving. Stop with Ctrl+C in its window, or kill the whole process tree.
+
+## 2026-10-08 – Read-only MCP tools for the AI
+- **MCP (Model Context Protocol)** is the standard way to give Claude tools. Our server offers
+  four, all *look-up only*: `list_incidents`, `get_incident`, `query_metrics`, `search_logs`.
+- **Safety by design**: there is simply no tool that can change anything; each tool is marked
+  `read_only_hint`, and tests fail if a write-sounding tool ever appears. Limits cap answer size
+  (50 series, 100 log lines, 24 h back).
+- **One way to read data**: the tools reuse the orchestrator's read-only adapters (HTTP GET only).
+- **Helpful errors**: a broken query returns the source's own explanation
+  ("unclosed left parenthesis"), so the AI can fix its query instead of guessing.
+- Live run: through the tools alone we found incident #1 (31% errors, commit ff69356), saw that
+  only `/checkout` fails (~46%), and read the "checkout failed: injected fault" lines.
+- `.mcp.json` tells Claude Code how to start the server; Claude Code asks you to approve it
+  the first time a session starts in this folder.
+- The folder is `mcp_server/`, not `mcp/`: a folder named `mcp` would hide the official library.

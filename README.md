@@ -28,8 +28,8 @@ Agreed scope: see [docs/decisions/0001-core-demo-scope.md](docs/decisions/0001-c
 | Logs in Grafana (Loki) | Done |
 | Alerts | Done |
 | Orchestrator | Done |
-| Read-only MCP tools | Next |
-| Claude triage agent | |
+| Read-only MCP tools | Done |
+| Claude triage agent | Next |
 | Evals | |
 | Slack: diagnosis + human approval | |
 
