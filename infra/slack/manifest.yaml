@@ -1,0 +1,19 @@
+display_information:
+  name: Sentinel
+  description: AI incident triage. It recommends; people decide.
+  background_color: "#1d2a3a"
+features:
+  bot_user:
+    display_name: Sentinel
+    always_online: true
+oauth_config:
+  scopes:
+    bot:
+      - chat:write
+      - chat:write.public  # post to public channels without being invited
+settings:
+  interactivity:
+    is_enabled: true
+  org_deploy_enabled: false
+  socket_mode_enabled: true
+  token_rotation_enabled: false

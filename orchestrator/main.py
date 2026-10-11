@@ -1,12 +1,14 @@
 """Sentinel orchestrator: receives alerts, opens incidents, attaches evidence and AI triage."""
 
 import os
+from contextlib import asynccontextmanager
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 
 from common.logging_setup import configure_logging
 from mcp_server.tools import make_toolbox
 from orchestrator.adapters.base import LogSource, MetricSource
+from orchestrator.adapters.chat import Chat, SlackChat
 from orchestrator.adapters.loki import LokiLogSource
 from orchestrator.adapters.prometheus import PrometheusMetricSource
 from orchestrator.models import AlertmanagerWebhook, Incident
@@ -21,6 +23,7 @@ def create_app(
     metrics: MetricSource | None = None,
     logs: LogSource | None = None,
     triage_agent=None,
+    chat: Chat | None = None,
 ) -> FastAPI:
     settings = settings or load_settings()
     log = configure_logging(settings.tags(), settings.log_file, name="orchestrator")
@@ -36,6 +39,10 @@ def create_app(
         else:
             skip_reason = "No ANTHROPIC_API_KEY set, so AI triage was skipped"
 
+    use_slack = chat is None and settings.slack_ready()
+    if use_slack:
+        chat = SlackChat(settings.slack_bot_token.get_secret_value(), settings.slack_channel)
+
     service = IncidentService(
         store=store,
         metrics=metrics,
@@ -43,8 +50,33 @@ def create_app(
         log=log,
         triage_agent=triage_agent,
         triage_skip_reason=skip_reason,
+        chat=chat,
+        dashboard_url=f"{settings.grafana_url.rstrip('/')}/d/shoplite",
     )
-    app = FastAPI(title="Sentinel Orchestrator", version=settings.version)
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        handler = None
+        if use_slack:
+            # Imported here so tests and Slack-less runs never load the Slack connection code.
+            from orchestrator.slack_listener import start_socket_mode
+
+            try:
+                handler = start_socket_mode(
+                    settings.slack_bot_token.get_secret_value(),
+                    settings.slack_app_token.get_secret_value(),
+                    service,
+                    log,
+                )
+                log.info("slack connected", extra={"fields": {"channel": settings.slack_channel}})
+            except Exception as exc:  # Slack trouble must not stop incident handling
+                log.error("slack connection failed", extra={"fields": {"error": str(exc)}})
+        yield
+        if handler is not None:
+            handler.close()
+
+    app = FastAPI(title="Sentinel Orchestrator", version=settings.version, lifespan=lifespan)
+    app.state.service = service
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -56,6 +88,8 @@ def create_app(
         result = service.handle(webhook)
         for incident_id in result.opened:
             background.add_task(service.investigate, incident_id)
+        for incident_id in result.resolved:
+            background.add_task(service.on_resolved, incident_id)
         return result
 
     @app.get("/incidents")

@@ -2,7 +2,7 @@
 
 import os
 
-from pydantic import BaseModel
+from pydantic import BaseModel, SecretStr
 
 # Environment variable name -> Settings field name.
 ENV_VARS = {
@@ -14,6 +14,10 @@ ENV_VARS = {
     "ORCHESTRATOR_DB_PATH": "db_path",
     "ORCHESTRATOR_LOG_FILE": "log_file",
     "TRIAGE_ENABLED": "triage_enabled",
+    "SLACK_BOT_TOKEN": "slack_bot_token",
+    "SLACK_APP_TOKEN": "slack_app_token",
+    "SLACK_CHANNEL": "slack_channel",
+    "GRAFANA_URL": "grafana_url",
 }
 
 
@@ -29,6 +33,15 @@ class Settings(BaseModel):
     log_file: str | None = None
     # AI triage runs when this is on AND an Anthropic API key is available.
     triage_enabled: bool = True
+    # Slack: all three set = post incidents and receive Approve / Reject clicks.
+    # SecretStr keeps the tokens out of logs and error messages.
+    slack_bot_token: SecretStr | None = None
+    slack_app_token: SecretStr | None = None
+    slack_channel: str | None = None
+    grafana_url: str = "http://127.0.0.1:3000"
+
+    def slack_ready(self) -> bool:
+        return bool(self.slack_bot_token and self.slack_app_token and self.slack_channel)
 
     def tags(self) -> dict[str, str]:
         """The four tags every log, metric and deploy must carry."""

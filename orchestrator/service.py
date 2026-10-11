@@ -1,14 +1,33 @@
 """Turns alerts into incidents: open, de-duplicate, resolve, attach evidence."""
 
 import logging
+import threading
 from datetime import UTC, datetime
 
 from pydantic import BaseModel, Field
 
-from orchestrator.adapters.base import LogSource, MetricSource
+from orchestrator.adapters.base import AdapterError, LogSource, MetricSource
+from orchestrator.adapters.chat import Chat
 from orchestrator.evidence import gather_evidence
-from orchestrator.models import Alert, AlertmanagerWebhook, Incident, TriageResult
+from orchestrator.messages import incident_message
+from orchestrator.models import Alert, AlertmanagerWebhook, Decision, Incident, TriageResult
 from orchestrator.store import IncidentStore
+
+
+def _outcome(action: str, recommendation: str | None, user_id: str) -> str:
+    who = f"<@{user_id}>"
+    if action != "approve":
+        return f"{who} rejected the AI's recommendation. No action taken."
+    if recommendation == "rollback":
+        return (
+            f"Rollback approved by {who}. Simulated: no deploy tool is connected yet, "
+            "so nothing was rolled back."
+        )
+    if recommendation == "investigate":
+        return f"{who} agreed to investigate."
+    if recommendation == "no_action":
+        return f"{who} agreed no action is needed."
+    return f"Approved by {who}."
 
 
 class WebhookResult(BaseModel):
@@ -26,6 +45,8 @@ class IncidentService:
         log: logging.Logger,
         triage_agent=None,
         triage_skip_reason: str = "AI triage is turned off",
+        chat: Chat | None = None,
+        dashboard_url: str = "http://127.0.0.1:3000/d/shoplite",
     ) -> None:
         self.store = store
         self.metrics = metrics
@@ -33,6 +54,10 @@ class IncidentService:
         self.log = log
         self.triage_agent = triage_agent
         self.triage_skip_reason = triage_skip_reason
+        self.chat = chat
+        self.dashboard_url = dashboard_url
+        # Two people clicking at the same moment must not both get recorded.
+        self._decision_lock = threading.Lock()
 
     def handle(self, webhook: AlertmanagerWebhook) -> WebhookResult:
         result = WebhookResult()
@@ -99,9 +124,88 @@ class IncidentService:
         )
 
     def investigate(self, incident_id: int) -> None:
-        """Background job for a new incident: gather evidence, then AI triage."""
+        """Background job for a new incident: gather evidence, AI triage, tell people."""
         self.attach_evidence(incident_id)
         self.run_triage(incident_id)
+        self.notify(incident_id)
+
+    # --- chat: show the incident to people and record what they decide ---
+
+    def notify(self, incident_id: int) -> None:
+        """Post the incident to chat, or refresh the message if it's already there.
+
+        Never raises: chat being down must not break incident handling.
+        """
+        if self.chat is None:
+            return
+        incident = self.store.get(incident_id)
+        if incident is None:
+            return
+        text, blocks = incident_message(incident, self.dashboard_url)
+        try:
+            if incident.chat is None:
+                ref = self.chat.post(text, blocks)
+                incident = self.store.get(incident_id)
+                incident.chat = ref
+                self.store.save(incident)
+                self._log("posted to chat", incident)
+            else:
+                self.chat.update(incident.chat, text, blocks)
+        except AdapterError as exc:
+            self._log("chat failed", incident, chat_error=str(exc))
+
+    def on_resolved(self, incident_id: int) -> None:
+        """Background job when an incident clears: refresh the message, note it in the thread."""
+        self.notify(incident_id)
+        incident = self.store.get(incident_id)
+        if self.chat is None or incident is None or incident.chat is None:
+            return
+        try:
+            self.chat.reply(
+                incident.chat,
+                f":large_green_circle: Resolved: the alert cleared at "
+                f"{incident.resolved_at:%H:%M} UTC.",
+            )
+        except AdapterError as exc:
+            self._log("chat failed", incident, chat_error=str(exc))
+
+    def decide(
+        self, incident_id: int, action: str, user_id: str, user_name: str
+    ) -> tuple[Decision | None, bool]:
+        """Record a person's decision. Returns (decision, was_already_decided).
+
+        The first decision wins; later clicks change nothing. Approving a rollback is
+        recorded as SIMULATED: nothing is deployed until a deploy tool is connected.
+        """
+        with self._decision_lock:
+            incident = self.store.get(incident_id)
+            if incident is None:
+                return None, False
+            if incident.decision is not None:
+                return incident.decision, True
+            recommendation = (
+                incident.triage.diagnosis.recommendation
+                if incident.triage and incident.triage.diagnosis
+                else None
+            )
+            incident.decision = Decision(
+                action="approved" if action == "approve" else "rejected",
+                recommendation=recommendation,
+                by_user_id=user_id,
+                by_name=user_name,
+                at=datetime.now(UTC),
+                outcome=_outcome(action, recommendation, user_id),
+            )
+            self.store.save(incident)
+        self._log(
+            "decision recorded",
+            incident,
+            decision=incident.decision.action,
+            recommendation=recommendation,
+            decided_by=user_name,
+        )
+        self.notify(incident_id)
+        return incident.decision, False
 
     @staticmethod
     def _new_incident(alert: Alert) -> Incident:

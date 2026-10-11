@@ -116,3 +116,17 @@ Running notes on what I learned at each step.
 - **Final baseline:** right call 32/32, right cause 32/32, no wrong rollbacks, about 18 s and
   $0.19 per diagnosis. At 100% the test can't show further gains, so add harder cases first.
 - A **safety gate** stops the test after its code changes until a person re-approves it.
+
+## 2026-10-11 – Slack: the human decides
+- Each diagnosed incident is posted to #new-channel with the AI's cause, evidence and
+  buttons. A click records **who decided and when** on the incident; the message updates so
+  nobody decides twice. "Approve rollback" is **simulated** until a deploy tool is connected.
+- **Socket Mode**: the app connects *out* to Slack, so the laptop needs no public address.
+- **Tokens are passwords.** A token pasted into chat is exposed: we revoked it and made a new
+  one. Revoking all tokens also uninstalls the app, which removes the bot from its channels,
+  so it had to be added back. `.env` is the only place for tokens; `.env.example` stays blank.
+- **Leaving a failing system running costs money:** the shop failed for hours, the alert kept
+  re-firing, and each new incident triggered a paid AI diagnosis (about $0.20 each).
+  Stop demos when done.
+- Live result: incidents #2 and #3 were posted automatically and both decisions
+  ("agreed to investigate") were recorded with the person's Slack identity.

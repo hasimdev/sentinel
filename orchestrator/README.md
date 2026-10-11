@@ -24,3 +24,20 @@ with the same four read-only tools as the MCP server, and stores a diagnosis on 
   triage is recorded as `skipped`. `TRIAGE_ENABLED=false` turns it off.
 - Limits: 12 look-ups and 8 rounds per incident. Failures are recorded, never raised.
 - Typical cost: about $0.20 per incident (measured: 46k input, 1.5k output tokens).
+
+## Slack (people decide)
+
+After triage, the incident is posted to a Slack channel with the AI's diagnosis, its
+evidence, and buttons: **Approve** (worded after the recommendation, e.g. "Approve rollback")
+and **Reject**, plus a link to the Grafana dashboard. The first click is recorded on the
+incident (`decision`: who, when, outcome) and the message updates; later clicks change nothing.
+When the alert clears, the message shows "Resolved" and a reply is added in its thread.
+
+- **Approve rollback is simulated:** no deploy tool is connected yet, so nothing is rolled back.
+- **Socket Mode:** Sentinel connects out to Slack, so no public address or tunnel is needed.
+- **Setup:** create the app from `infra/slack/manifest.yaml`, add it to the channel, and put
+  `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN` and `SLACK_CHANNEL` in `.env` (never in chat or git).
+  Without all three, Slack is simply off.
+- **Fails safe:** if Slack is unreachable or the bot isn't in the channel, the incident is
+  unaffected and the reason is logged (`chat failed`). A failed post is not retried
+  automatically yet.

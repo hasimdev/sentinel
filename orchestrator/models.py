@@ -56,6 +56,23 @@ class TriageResult(BaseModel):
     finished_at: datetime | None = None
 
 
+# --- People: where the incident was posted, and what a person decided ---
+class ChatRef(BaseModel):
+    """The chat message that shows this incident (so it can be updated in place)."""
+
+    channel: str
+    ts: str
+
+
+class Decision(BaseModel):
+    action: Literal["approved", "rejected"]
+    recommendation: str | None = None  # what the AI recommended at the time
+    by_user_id: str
+    by_name: str
+    at: datetime
+    outcome: str  # what happened as a result, in plain words
+
+
 # --- Our record of an incident ---
 class Incident(BaseModel):
     id: int | None = None
@@ -73,3 +90,5 @@ class Incident(BaseModel):
     resolved_at: datetime | None = None
     evidence: Evidence | None = None
     triage: TriageResult | None = None
+    chat: ChatRef | None = None
+    decision: Decision | None = None
