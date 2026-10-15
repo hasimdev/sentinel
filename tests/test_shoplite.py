@@ -35,7 +35,7 @@ def test_checkout_success():
     body = resp.json()
     assert body["product_id"] == "mug"
     assert body["quantity"] == 2
-    assert body["total_cents"] == 2400
+    assert body["total_cents"] == 1800  # 2 x 900, the autumn promo price
     assert body["order_id"]
 
 

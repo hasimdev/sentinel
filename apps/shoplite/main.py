@@ -41,6 +41,15 @@ PRODUCTS = {
     ]
 }
 
+# 0.2.0: autumn promo prices (only some products are on promo).
+PROMO_PRICES = {"mug": 900, "tee": 2000}
+
+
+def promo_price(product: Product) -> int:
+    """Price after the autumn promo."""
+    return PROMO_PRICES[product.id]
+
+
 _rng = secrets.SystemRandom()
 
 
@@ -87,7 +96,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             order_id=uuid.uuid4().hex[:12],
             product_id=product.id,
             quantity=req.quantity,
-            total_cents=product.price_cents * req.quantity,
+            total_cents=promo_price(product) * req.quantity,
         )
         log.info("checkout ok", extra={"fields": order.model_dump()})
         return order
