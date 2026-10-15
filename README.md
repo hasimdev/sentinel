@@ -33,7 +33,17 @@ Agreed scope: see [docs/decisions/0001-core-demo-scope.md](docs/decisions/0001-c
 | Evals | Done |
 | Slack: diagnosis + human approval | Done |
 
-Deferred: web dashboard, Jira, ServiceNow, Harness (rollback simulated first).
+Deferred: web dashboard.
+
+### Part 2: AI meets change management
+
+| Step | Status |
+|---|---|
+| A. Versioned releases (good 0.1.0, buggy 0.2.0), make deploy / rollback | Done |
+| B. Jira follow-up tickets | Next |
+| C. ServiceNow incident + change request | |
+| D. Harness deploy and real rollback after Slack approval | |
+| E. Measure the approval step; full demo | |
 
 ## Monitoring locally
 

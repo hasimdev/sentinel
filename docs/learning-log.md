@@ -130,3 +130,16 @@ Running notes on what I learned at each step.
   Stop demos when done.
 - Live result: incidents #2 and #3 were posted automatically and both decisions
   ("agreed to investigate") were recorded with the person's Slack identity.
+
+## 2026-10-15 – Part 2, Step A: real releases
+- A **release** is a numbered, tagged version of the code (`shoplite-v0.1.0`), packaged as a
+  Docker image stamped with its version and commit. Deploying swaps the running version;
+  **rolling back is just deploying the older one**.
+- 0.2.0 has a **real bug**: a promo-price feature crashes for products without a promo.
+  Its test passed because it only checked a product that had one. That's how real bugs ship.
+  It lives on its own branch, so `main` stays clean.
+- Live run: 0.1.0 had no errors; deploying 0.2.0 raised errors to 35%, the incident opened
+  in 109 s, and Claude recommended **roll back** with high confidence (3 look-ups, $0.10),
+  naming the `KeyError` in `promo_price`. A manual rollback to 0.1.0 brought errors to zero
+  and the incident resolved itself 76 s later.
+- Every deploy and rollback is logged with the four tags, so deploy history is evidence too.
