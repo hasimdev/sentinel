@@ -143,3 +143,13 @@ Running notes on what I learned at each step.
   naming the `KeyError` in `promo_price`. A manual rollback to 0.1.0 brought errors to zero
   and the incident resolved itself 76 s later.
 - Every deploy and rollback is logged with the four tags, so deploy history is evidence too.
+
+## 2026-10-15 – Part 2, Step B: Jira follow-up tickets
+- Rolling back fixes the *symptom*. Someone still has to fix the *cause*, so when an
+  incident resolves, Sentinel files a Jira task with the AI's diagnosis, evidence, versions
+  and timeline, and posts the ticket number in the Slack thread. One ticket per incident.
+- The `Ticketing` adapter means Jira could be swapped (e.g. for ServiceNow tasks) without
+  touching the rest.
+- Jira now calls projects "spaces"; the project key (SEN) is the ticket prefix.
+- Live run: bad release, AI said roll back (high confidence), manual rollback, resolved,
+  **SEN-1** filed with the exact `KeyError` in `promo_price` as its cause.

@@ -8,10 +8,19 @@ from pydantic import BaseModel, Field
 
 from orchestrator.adapters.base import AdapterError, LogSource, MetricSource
 from orchestrator.adapters.chat import Chat
+from orchestrator.adapters.ticketing import Ticketing
 from orchestrator.evidence import gather_evidence
 from orchestrator.messages import incident_message
-from orchestrator.models import Alert, AlertmanagerWebhook, Decision, Incident, TriageResult
+from orchestrator.models import (
+    Alert,
+    AlertmanagerWebhook,
+    Decision,
+    Incident,
+    TicketRef,
+    TriageResult,
+)
 from orchestrator.store import IncidentStore
+from orchestrator.tickets import followup_ticket, needs_followup
 
 
 def _outcome(action: str, recommendation: str | None, user_id: str) -> str:
@@ -47,7 +56,9 @@ class IncidentService:
         triage_skip_reason: str = "AI triage is turned off",
         chat: Chat | None = None,
         dashboard_url: str = "http://127.0.0.1:3000/d/shoplite",
+        ticketing: Ticketing | None = None,
     ) -> None:
+        self.ticketing = ticketing
         self.store = store
         self.metrics = metrics
         self.logs = logs
@@ -155,19 +166,40 @@ class IncidentService:
             self._log("chat failed", incident, chat_error=str(exc))
 
     def on_resolved(self, incident_id: int) -> None:
-        """Background job when an incident clears: refresh the message, note it in the thread."""
+        """Background job when an incident clears: refresh the message, note it in the
+        thread, and file a follow-up ticket to fix the cause properly."""
         self.notify(incident_id)
+        ticket = self.file_followup(incident_id)
         incident = self.store.get(incident_id)
         if self.chat is None or incident is None or incident.chat is None:
             return
+        text = (
+            f":large_green_circle: Resolved: the alert cleared at {incident.resolved_at:%H:%M} UTC."
+        )
+        if ticket:
+            text += f"\n:ticket: Follow-up ticket to fix the cause: <{ticket.url}|{ticket.key}>"
         try:
-            self.chat.reply(
-                incident.chat,
-                f":large_green_circle: Resolved: the alert cleared at "
-                f"{incident.resolved_at:%H:%M} UTC.",
-            )
+            self.chat.reply(incident.chat, text)
         except AdapterError as exc:
             self._log("chat failed", incident, chat_error=str(exc))
+
+    def file_followup(self, incident_id: int) -> TicketRef | None:
+        """Create the follow-up ticket once. Never raises; returns the ticket or None."""
+        if self.ticketing is None:
+            return None
+        with self._decision_lock:  # one ticket per incident, even if called twice
+            incident = self.store.get(incident_id)
+            if incident is None or incident.followup is not None or not needs_followup(incident):
+                return incident.followup if incident else None
+            try:
+                ticket = self.ticketing.create(followup_ticket(incident, self.dashboard_url))
+            except AdapterError as exc:
+                self._log("ticket failed", incident, ticket_error=str(exc))
+                return None
+            incident.followup = ticket
+            self.store.save(incident)
+        self._log("follow-up ticket filed", incident, ticket=ticket.key)
+        return ticket
 
     def decide(
         self, incident_id: int, action: str, user_id: str, user_name: str

@@ -11,6 +11,7 @@ from orchestrator.adapters.base import LogSource, MetricSource
 from orchestrator.adapters.chat import Chat, SlackChat
 from orchestrator.adapters.loki import LokiLogSource
 from orchestrator.adapters.prometheus import PrometheusMetricSource
+from orchestrator.adapters.ticketing import JiraTicketing, Ticketing
 from orchestrator.models import AlertmanagerWebhook, Incident
 from orchestrator.service import IncidentService, WebhookResult
 from orchestrator.settings import Settings, load_settings
@@ -24,6 +25,7 @@ def create_app(
     logs: LogSource | None = None,
     triage_agent=None,
     chat: Chat | None = None,
+    ticketing: Ticketing | None = None,
 ) -> FastAPI:
     settings = settings or load_settings()
     log = configure_logging(settings.tags(), settings.log_file, name="orchestrator")
@@ -43,6 +45,14 @@ def create_app(
     if use_slack:
         chat = SlackChat(settings.slack_bot_token.get_secret_value(), settings.slack_channel)
 
+    if ticketing is None and settings.jira_ready():
+        ticketing = JiraTicketing(
+            settings.jira_base_url,
+            settings.jira_email,
+            settings.jira_api_token.get_secret_value(),
+            settings.jira_project_key,
+        )
+
     service = IncidentService(
         store=store,
         metrics=metrics,
@@ -52,6 +62,7 @@ def create_app(
         triage_skip_reason=skip_reason,
         chat=chat,
         dashboard_url=f"{settings.grafana_url.rstrip('/')}/d/shoplite",
+        ticketing=ticketing,
     )
 
     @asynccontextmanager

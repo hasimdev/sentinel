@@ -41,3 +41,13 @@ When the alert clears, the message shows "Resolved" and a reply is added in its 
 - **Fails safe:** if Slack is unreachable or the bot isn't in the channel, the incident is
   unaffected and the reason is logged (`chat failed`). A failed post is not retried
   automatically yet.
+
+## Jira (follow-up tickets)
+
+When an incident resolves and the AI found a cause worth fixing (not "no action"), Sentinel
+files one follow-up ticket: the AI's diagnosis and evidence, the version and commit, the
+timeline (opened, resolved, who decided) and a dashboard link, labelled `sentinel`, the
+service and the version. The ticket key is stored on the incident (`followup`) and posted in
+the incident's Slack thread. Needs `JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN` and
+`JIRA_PROJECT_KEY` in `.env`; without them, tickets are off. Jira trouble never affects the
+incident (logged as `ticket failed`).

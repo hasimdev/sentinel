@@ -18,6 +18,10 @@ ENV_VARS = {
     "SLACK_APP_TOKEN": "slack_app_token",
     "SLACK_CHANNEL": "slack_channel",
     "GRAFANA_URL": "grafana_url",
+    "JIRA_BASE_URL": "jira_base_url",
+    "JIRA_EMAIL": "jira_email",
+    "JIRA_API_TOKEN": "jira_api_token",
+    "JIRA_PROJECT_KEY": "jira_project_key",
 }
 
 
@@ -39,6 +43,17 @@ class Settings(BaseModel):
     slack_app_token: SecretStr | None = None
     slack_channel: str | None = None
     grafana_url: str = "http://127.0.0.1:3000"
+
+    # Jira: all four set = file follow-up tickets when incidents resolve.
+    jira_base_url: str | None = None
+    jira_email: str | None = None
+    jira_api_token: SecretStr | None = None
+    jira_project_key: str | None = None
+
+    def jira_ready(self) -> bool:
+        return bool(
+            self.jira_base_url and self.jira_email and self.jira_api_token and self.jira_project_key
+        )
 
     def slack_ready(self) -> bool:
         return bool(self.slack_bot_token and self.slack_app_token and self.slack_channel)

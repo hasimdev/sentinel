@@ -64,6 +64,13 @@ class ChatRef(BaseModel):
     ts: str
 
 
+class TicketRef(BaseModel):
+    """A ticket in the team's tracker (e.g. Jira SEN-1)."""
+
+    key: str
+    url: str
+
+
 class Decision(BaseModel):
     action: Literal["approved", "rejected"]
     recommendation: str | None = None  # what the AI recommended at the time
@@ -92,3 +99,4 @@ class Incident(BaseModel):
     triage: TriageResult | None = None
     chat: ChatRef | None = None
     decision: Decision | None = None
+    followup: TicketRef | None = None  # the ticket to fix the root cause properly
