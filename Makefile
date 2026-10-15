@@ -13,7 +13,7 @@ export COMMIT_SHA ?= $(shell git rev-parse --short HEAD)
 
 COMPOSE := docker compose -f infra/docker-compose.yml --env-file .env
 
-.PHONY: dev test lint run-shoplite traffic infra-up infra-down infra-check alerts run-orchestrator incidents
+.PHONY: dev test lint run-shoplite traffic infra-up infra-down infra-check alerts run-orchestrator incidents release deploy shoplite-status shoplite-stop
 
 dev:
 	$(BOOTSTRAP) -m venv .venv
@@ -63,3 +63,17 @@ infra-check:
 # Follow alerts as they arrive (Ctrl+C to stop watching).
 alerts:
 	$(COMPOSE) logs -f alert-inbox
+
+# --- ShopLite releases (built from Git tags shoplite-v<version>) ---
+# make release VERSION=0.2.0  ->  build the image;  make deploy VERSION=0.1.0  ->  run it (rollback = older version)
+release:
+	$(PY) -m deploy.shoplite release $(VERSION)
+
+deploy:
+	$(PY) -m deploy.shoplite deploy $(VERSION)
+
+shoplite-status:
+	$(PY) -m deploy.shoplite status
+
+shoplite-stop:
+	$(PY) -m deploy.shoplite stop

@@ -1,9 +1,11 @@
 """ShopLite: a tiny demo shop that Sentinel monitors (and breaks on purpose)."""
 
 import secrets
+import traceback
 import uuid
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from apps.shoplite.metrics import instrument
@@ -47,6 +49,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     log = configure_logging(settings.tags(), settings.log_file)
     app = FastAPI(title="ShopLite", version=settings.version)
     app.state.metrics_registry = instrument(app, settings.tags())
+
+    @app.exception_handler(Exception)
+    async def unexpected_error(request: Request, exc: Exception) -> JSONResponse:
+        # A real bug: log it as a tagged ERROR line (so Loki and the AI can see it) and
+        # answer 500 instead of leaking a stack trace.
+        where = traceback.extract_tb(exc.__traceback__)[-1].name if exc.__traceback__ else "?"
+        log.error(
+            f"{request.url.path.strip('/')} failed: {type(exc).__name__}: {exc} in {where}",
+            extra={"fields": {"route": request.url.path, "error_type": type(exc).__name__}},
+        )
+        return JSONResponse(status_code=500, content={"detail": "Internal error"})
 
     @app.get("/health")
     def health() -> dict[str, str]:

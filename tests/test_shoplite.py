@@ -88,3 +88,25 @@ def test_settings_read_from_environment(monkeypatch):
 def test_fail_rate_outside_0_to_1_is_rejected():
     with pytest.raises(ValidationError):
         Settings(fail_rate=1.5)
+
+
+def test_unexpected_errors_are_logged_with_tags_and_return_500(caplog):
+    app = create_app(Settings(**TAGS))
+
+    @app.get("/boom")
+    def boom():
+        raise KeyError("cap")
+
+    client = TestClient(app, raise_server_exceptions=False)
+    with caplog.at_level(logging.ERROR, logger="shoplite"):
+        resp = client.get("/boom")
+    assert resp.status_code == 500 and resp.json() == {"detail": "Internal error"}
+    record = next(r for r in caplog.records if r.levelname == "ERROR")
+    assert record.getMessage() == "boom failed: KeyError: 'cap' in boom"
+    line = json.loads(JsonFormatter().format(record))
+    assert line["version"] == TAGS["version"] and line["commit_sha"] == TAGS["commit_sha"]
+    count = app.state.metrics_registry.get_sample_value(
+        "shoplite_http_requests_total",
+        {**TAGS, "method": "GET", "route": "/boom", "status": "500"},
+    )
+    assert count == 1
