@@ -71,6 +71,15 @@ class TicketRef(BaseModel):
     url: str
 
 
+class RecordRef(BaseModel):
+    """A ServiceNow record, e.g. incident INC0010002 or change_request CHG0030005."""
+
+    table: str
+    number: str
+    sys_id: str
+    url: str
+
+
 class Decision(BaseModel):
     action: Literal["approved", "rejected"]
     recommendation: str | None = None  # what the AI recommended at the time
@@ -100,3 +109,5 @@ class Incident(BaseModel):
     chat: ChatRef | None = None
     decision: Decision | None = None
     followup: TicketRef | None = None  # the ticket to fix the root cause properly
+    itsm_incident: RecordRef | None = None  # the incident record in ServiceNow
+    change: RecordRef | None = None  # emergency change raised when the AI recommends rollback

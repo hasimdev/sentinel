@@ -51,3 +51,30 @@ service and the version. The ticket key is stored on the incident (`followup`) a
 the incident's Slack thread. Needs `JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN` and
 `JIRA_PROJECT_KEY` in `.env`; without them, tickets are off. Jira trouble never affects the
 incident (logged as `ticket failed`).
+
+## ServiceNow (incident record, emergency change, CAB approval)
+
+Each new incident gets a ServiceNow **incident**; the AI's diagnosis is added as a work note.
+When the AI recommends a **rollback**, Sentinel raises an **emergency change**, links it to the
+incident, assigns it to the `Change Management` group and moves it to *Authorize*, so
+ServiceNow asks its CAB to approve it. The Slack message links both records.
+
+Who may decide is ServiceNow's call, not Sentinel's: a Slack click on a change counts only if
+ServiceNow is waiting on **that person's** approval. Sentinel reads the clicker's email from
+Slack (`users:read.email`), finds the matching ServiceNow user, and records their approval or
+rejection on their own approval request ("Approved in Slack by ..., via Sentinel"). Anyone
+else gets a private "you're not an approver" reply and nothing is recorded. A rejection
+cancels the change. When the alert clears, the incident is resolved ("Workaround provided")
+and a change nobody decided on is cancelled. The rollback itself is still simulated until a
+deploy tool is connected (Part 2, Step D).
+
+Needs `SERVICENOW_INSTANCE_URL`, `SERVICENOW_USERNAME` and `SERVICENOW_PASSWORD` in `.env`
+(optional `SERVICENOW_CHANGE_GROUP`). The integration user needs the `itil` role, plus
+`approval_admin` so it can record an approval on an approver's behalf. ServiceNow trouble
+never affects the incident (logged as `servicenow failed`); a click that can't be verified is
+refused, never recorded unverified.
+
+Instance quirks learned the hard way: change state changes must go through the Change
+Management API (`/api/sn_chg_rest/change/...`), as the Table API is blocked by a
+state-transition rule; moving to *Authorize* needs an assignment group; on this instance the
+emergency CAB is the `CAB Approval` group.

@@ -8,6 +8,7 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException
 from common.logging_setup import configure_logging
 from mcp_server.tools import make_toolbox
 from orchestrator.adapters.base import LogSource, MetricSource
+from orchestrator.adapters.change_mgmt import ChangeMgmt, ServiceNowChangeMgmt
 from orchestrator.adapters.chat import Chat, SlackChat
 from orchestrator.adapters.loki import LokiLogSource
 from orchestrator.adapters.prometheus import PrometheusMetricSource
@@ -26,6 +27,7 @@ def create_app(
     triage_agent=None,
     chat: Chat | None = None,
     ticketing: Ticketing | None = None,
+    change_mgmt: ChangeMgmt | None = None,
 ) -> FastAPI:
     settings = settings or load_settings()
     log = configure_logging(settings.tags(), settings.log_file, name="orchestrator")
@@ -53,6 +55,14 @@ def create_app(
             settings.jira_project_key,
         )
 
+    if change_mgmt is None and settings.servicenow_ready():
+        change_mgmt = ServiceNowChangeMgmt(
+            settings.servicenow_instance_url,
+            settings.servicenow_username,
+            settings.servicenow_password.get_secret_value(),
+            settings.servicenow_change_group,
+        )
+
     service = IncidentService(
         store=store,
         metrics=metrics,
@@ -63,6 +73,7 @@ def create_app(
         chat=chat,
         dashboard_url=f"{settings.grafana_url.rstrip('/')}/d/shoplite",
         ticketing=ticketing,
+        change_mgmt=change_mgmt,
     )
 
     @asynccontextmanager

@@ -153,3 +153,21 @@ Running notes on what I learned at each step.
 - Jira now calls projects "spaces"; the project key (SEN) is the ticket prefix.
 - Live run: bad release, AI said roll back (high confidence), manual rollback, resolved,
   **SEN-1** filed with the exact `KeyError` in `promo_price` as its cause.
+
+## 2026-10-16 – Part 2, Step C: ServiceNow and CAB approval from Slack
+- Every incident now has a **ServiceNow incident** with the AI's diagnosis as a work note.
+  When the AI says roll back, Sentinel raises an **emergency change** and ServiceNow asks the
+  **CAB** to approve it. The rollback can't happen on the AI's word alone.
+- **Who may approve is ServiceNow's call, not Sentinel's.** A Slack click counts only if
+  ServiceNow is waiting on that person's approval (matched by email). Their approval is
+  recorded **under their own name**; anyone else gets "you're not an approver".
+- Real-instance surprises: state changes must go through the Change Management API; the
+  emergency CAB on this instance is the `CAB Approval` group, not `eCAB Approval`; demo data
+  reuses change numbers, so Sentinel always works by record ID; a field the integration user
+  can't see is **silently ignored**, so the INC-CHG link is a work note on each record.
+- Docker's Linux engine (WSL) hung again; `wsl --shutdown` and a restart fixed it.
+- Live run: bad release, INC0010002 opened, AI said roll back (high confidence), CHG0030007
+  went to the CAB. One click in Slack, and ServiceNow showed **"Approved in Slack by
+  hasim.abu, via Sentinel"** on Abu Ansari's approval; the change moved to Scheduled and the
+  other CAB approvals to "No longer required". After rollback the INC resolved itself with
+  the cause, the decision and the Jira follow-up **SEN-2** in its close notes.

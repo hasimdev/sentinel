@@ -10,11 +10,21 @@ from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
 from orchestrator.messages import APPROVE_ACTION, REJECT_ACTION
+from orchestrator.service import NotAllowed
 
 
-def handle_click(service, body: dict) -> str | None:
+def clicker_email(client, user_id: str) -> str | None:
+    """The clicker's email from their Slack profile (needs users:read.email), or None."""
+    try:
+        return client.users_info(user=user_id)["user"]["profile"].get("email")
+    except Exception:  # missing scope, Slack trouble: ServiceNow checks then refuse the click
+        return None
+
+
+def handle_click(service, body: dict, email: str | None = None) -> str | None:
     """Turn a button click into a recorded decision.
 
+    `email` is the clicker's Slack email; ServiceNow uses it to check they may approve.
     Returns a note for the clicker if nothing changed, otherwise None.
     """
     action = body["actions"][0]
@@ -23,7 +33,10 @@ def handle_click(service, body: dict) -> str | None:
     user_id = user.get("id", "unknown")
     user_name = user.get("name") or user.get("username") or user_id
     verb = "approve" if action["action_id"] == APPROVE_ACTION else "reject"
-    decision, already = service.decide(incident_id, verb, user_id, user_name)
+    try:
+        decision, already = service.decide(incident_id, verb, user_id, user_name, email)
+    except NotAllowed as exc:
+        return str(exc)
     if decision is None:
         return f"Incident #{incident_id} no longer exists."
     if already:
@@ -37,7 +50,7 @@ def start_socket_mode(bot_token: str, app_token: str, service, log: logging.Logg
 
     def on_click(ack, body, client):
         ack()  # Slack needs an answer within 3 seconds
-        note = handle_click(service, body)
+        note = handle_click(service, body, clicker_email(client, body["user"]["id"]))
         if note:
             client.chat_postEphemeral(
                 channel=body["channel"]["id"], user=body["user"]["id"], text=note

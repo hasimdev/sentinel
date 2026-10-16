@@ -11,6 +11,8 @@ oauth_config:
     bot:
       - chat:write
       - chat:write.public  # post to public channels without being invited
+      - users:read  # look up who clicked Approve...
+      - users:read.email  # ...and their email, so ServiceNow can check they're a CAB approver
 settings:
   interactivity:
     is_enabled: true

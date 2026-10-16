@@ -22,6 +22,10 @@ ENV_VARS = {
     "JIRA_EMAIL": "jira_email",
     "JIRA_API_TOKEN": "jira_api_token",
     "JIRA_PROJECT_KEY": "jira_project_key",
+    "SERVICENOW_INSTANCE_URL": "servicenow_instance_url",
+    "SERVICENOW_USERNAME": "servicenow_username",
+    "SERVICENOW_PASSWORD": "servicenow_password",
+    "SERVICENOW_CHANGE_GROUP": "servicenow_change_group",
 }
 
 
@@ -49,6 +53,18 @@ class Settings(BaseModel):
     jira_email: str | None = None
     jira_api_token: SecretStr | None = None
     jira_project_key: str | None = None
+
+    # ServiceNow: all three set = incident records, emergency changes and CAB approvals.
+    servicenow_instance_url: str | None = None
+    servicenow_username: str | None = None
+    servicenow_password: SecretStr | None = None
+    # The group a change is assigned to before it goes to the CAB for approval.
+    servicenow_change_group: str = "Change Management"
+
+    def servicenow_ready(self) -> bool:
+        return bool(
+            self.servicenow_instance_url and self.servicenow_username and self.servicenow_password
+        )
 
     def jira_ready(self) -> bool:
         return bool(

@@ -26,6 +26,20 @@ def _time(dt) -> str:
     return dt.strftime("%H:%M UTC") if dt else "?"
 
 
+def servicenow_line(incident: Incident) -> str | None:
+    """Links to the ServiceNow incident and emergency change, if there are any."""
+    parts = []
+    if incident.itsm_incident:
+        r = incident.itsm_incident
+        parts.append(f"incident <{r.url}|{r.number}>")
+    if incident.change:
+        c = incident.change
+        waiting = incident.decision is None and incident.status == "open"
+        note = " (needs CAB approval: only a CAB approver's click counts)" if waiting else ""
+        parts.append(f"emergency change <{c.url}|{c.number}>{note}")
+    return f":clipboard: ServiceNow: {' · '.join(parts)}" if parts else None
+
+
 def incident_message(incident: Incident, dashboard_url: str) -> tuple[str, list[dict]]:
     triage = incident.triage
     diagnosis = triage.diagnosis if triage else None
@@ -88,6 +102,10 @@ def incident_message(incident: Incident, dashboard_url: str) -> tuple[str, list[
                 "text": {"type": "mrkdwn", "text": _cut(f"*No AI diagnosis:* {reason}")},
             }
         )
+
+    records = servicenow_line(incident)
+    if records:
+        blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": records}]})
 
     elements: list[dict] = []
     if incident.decision is None and incident.status == "open":
