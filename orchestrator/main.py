@@ -3,7 +3,8 @@
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Response
+from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, generate_latest
 
 from common.logging_setup import configure_logging
 from mcp_server.tools import make_toolbox
@@ -14,6 +15,7 @@ from orchestrator.adapters.deploy_control import DeployControl, HarnessDeployCon
 from orchestrator.adapters.loki import LokiLogSource
 from orchestrator.adapters.prometheus import PrometheusMetricSource
 from orchestrator.adapters.ticketing import JiraTicketing, Ticketing
+from orchestrator.insights import IncidentMetrics
 from orchestrator.models import AlertmanagerWebhook, Incident
 from orchestrator.service import IncidentService, WebhookResult
 from orchestrator.settings import Settings, load_settings
@@ -112,6 +114,13 @@ def create_app(
 
     app = FastAPI(title="Sentinel Orchestrator", version=settings.version, lifespan=lifespan)
     app.state.service = service
+    # Metrics about the AI + human loop, worked out from the incident store (see insights.py).
+    registry = CollectorRegistry()
+    registry.register(IncidentMetrics(store, settings.tags()))
+
+    @app.get("/metrics", include_in_schema=False)
+    def metrics() -> Response:
+        return Response(generate_latest(registry), media_type=CONTENT_TYPE_LATEST)
 
     @app.get("/health")
     def health() -> dict[str, str]:

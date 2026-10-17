@@ -92,3 +92,12 @@ closed as unsuccessful, and Slack says a person must take over.
 Real rollbacks need both Harness (`HARNESS_ACCOUNT_ID`, `HARNESS_API_KEY`) and ServiceNow:
 without a ServiceNow-verified approval, rollbacks stay simulated. Optional settings:
 `HARNESS_ORG`, `HARNESS_PROJECT`, `HARNESS_PIPELINE`, `DEPLOY_LOG_PATH`. Setup: deploy/README.md.
+
+## Measuring the AI + human loop
+
+`GET /metrics` (scraped by Prometheus as job `sentinel`) publishes numbers worked out from
+every incident in the store at scrape time, so restarts lose nothing: incidents by AI
+recommendation, decisions (agreed / overrode), rollbacks by result, and histograms plus
+all-time medians for **time to diagnose** (alert → AI recommendation), **time to decide**
+(AI recommendation → human click), **rollback duration** and **time to recover**. Grafana's
+"Sentinel – AI & approvals" dashboard (`/d/sentinel`) shows them. See `orchestrator/insights.py`.

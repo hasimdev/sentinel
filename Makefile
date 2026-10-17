@@ -94,4 +94,4 @@ harness-pipeline:
 	$(PY) infra/harness/sync_pipeline.py
 
 harness-down:
-	$(COMPOSE) --profile harness stop harness-delegate
+	$(COMPOSE) --profile harness rm --stop --force harness-delegate

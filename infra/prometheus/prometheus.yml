@@ -14,3 +14,9 @@ scrape_configs:
   - job_name: shoplite
     static_configs:
       - targets: ["host.docker.internal:8000"]
+
+  # Sentinel's own numbers: time to decide, agree rate, time to recover, rollbacks.
+  - job_name: sentinel
+    scrape_interval: 15s
+    static_configs:
+      - targets: ["host.docker.internal:8001"]

@@ -43,7 +43,7 @@ Deferred: web dashboard.
 | B. Jira follow-up tickets | Done |
 | C. ServiceNow incident, emergency change, CAB approval from Slack | Done |
 | D. Harness deploy and real rollback after Slack approval | Done |
-| E. Measure the approval step; full demo | Next |
+| E. Measure the approval step (Grafana), full demo (docs/demo.md), Part 2 post | In progress |
 
 ## Monitoring locally
 
