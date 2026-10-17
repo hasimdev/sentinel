@@ -16,6 +16,9 @@ from orchestrator.models import RecordRef
 
 # ServiceNow state codes (Change Management API and the incident table).
 CHANGE_AUTHORIZE = "-3"
+CHANGE_IMPLEMENT = "-1"
+CHANGE_REVIEW = "0"
+CHANGE_CLOSED = "3"
 CHANGE_CANCELED = "4"
 INCIDENT_RESOLVED = "6"
 # The resolution codes this instance accepts (older "Solved (Work Around)" is rejected).
@@ -56,6 +59,8 @@ class ChangeMgmt(Protocol):
     def pending_approver(self, change: RecordRef, email: str) -> Approver | None: ...
     def record_approval(self, approver: Approver, approved: bool, comment: str) -> None: ...
     def cancel_change(self, change: RecordRef, notes: str) -> None: ...
+    def start_implementation(self, change: RecordRef, note: str) -> None: ...
+    def close_change(self, change: RecordRef, successful: bool, notes: str) -> None: ...
 
 
 class ServiceNowChangeMgmt:
@@ -159,6 +164,19 @@ class ServiceNowChangeMgmt:
     def cancel_change(self, change: RecordRef, notes: str) -> None:
         body = {"state": CHANGE_CANCELED, "close_notes": notes}
         self._call("PATCH", f"/api/sn_chg_rest/change/{change.sys_id}", json=body)
+
+    def start_implementation(self, change: RecordRef, note: str) -> None:
+        """Approved (Scheduled) -> Implement: the work is starting."""
+        body = {"state": CHANGE_IMPLEMENT, "work_notes": note}
+        self._call("PATCH", f"/api/sn_chg_rest/change/{change.sys_id}", json=body)
+
+    def close_change(self, change: RecordRef, successful: bool, notes: str) -> None:
+        """Implement -> Review -> Closed, recording whether the change worked."""
+        path = f"/api/sn_chg_rest/change/{change.sys_id}"
+        self._call("PATCH", path, json={"state": CHANGE_REVIEW})
+        code = "successful" if successful else "unsuccessful"
+        body = {"state": CHANGE_CLOSED, "close_code": code, "close_notes": notes}
+        self._call("PATCH", path, json=body)
 
     # --- helpers ---
 

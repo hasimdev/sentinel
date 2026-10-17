@@ -26,6 +26,12 @@ ENV_VARS = {
     "SERVICENOW_USERNAME": "servicenow_username",
     "SERVICENOW_PASSWORD": "servicenow_password",
     "SERVICENOW_CHANGE_GROUP": "servicenow_change_group",
+    "HARNESS_ACCOUNT_ID": "harness_account_id",
+    "HARNESS_API_KEY": "harness_api_key",
+    "HARNESS_ORG": "harness_org",
+    "HARNESS_PROJECT": "harness_project",
+    "HARNESS_PIPELINE": "harness_pipeline",
+    "DEPLOY_LOG_PATH": "deploy_log_path",
 }
 
 
@@ -60,6 +66,17 @@ class Settings(BaseModel):
     servicenow_password: SecretStr | None = None
     # The group a change is assigned to before it goes to the CAB for approval.
     servicenow_change_group: str = "Change Management"
+
+    # Harness: account ID + API key = real rollbacks after a CAB approval (needs ServiceNow too).
+    harness_account_id: str | None = None
+    harness_api_key: SecretStr | None = None
+    harness_org: str = "default"
+    harness_project: str = "sentinel"
+    harness_pipeline: str = "shoplite_deploy"
+    deploy_log_path: str = "logs/deploys.log"  # where deploys are recorded (rollback target)
+
+    def harness_ready(self) -> bool:
+        return bool(self.harness_account_id and self.harness_api_key)
 
     def servicenow_ready(self) -> bool:
         return bool(

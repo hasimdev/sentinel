@@ -105,3 +105,38 @@ def test_first_deploy_has_no_previous_version():
 
 def test_version_ordering_is_numeric_not_alphabetical():
     assert shoplite.version_key("0.10.0") > shoplite.version_key("0.9.0")
+
+
+# --- running inside the deployer container (Harness) ---
+
+
+@pytest.mark.parametrize("bad", ["0.1", "0.1.0; rm -rf /", "latest", "0.1.0\n", "../0.1.0"])
+def test_only_plain_versions_are_deployed(bad):
+    shell = FakeShell(images={"0.1.0"})
+    with pytest.raises(ReleaseError, match="Not a version"):
+        shoplite.deploy(bad, runner=shell)
+    assert shell.calls == []  # refused before any command ran
+
+
+def test_windows_folders_become_docker_desktop_paths():
+    from pathlib import PureWindowsPath
+
+    path = PureWindowsPath(r"C:\Users\me\sentinel\logs")
+    assert shoplite.docker_host_path(path) == "/run/desktop/mnt/host/c/Users/me/sentinel/logs"
+    assert shoplite.docker_host_path("/home/me/logs") == "/home/me/logs"
+
+
+def test_deploy_in_a_container_uses_the_given_logs_folder_and_records_who(deploy_log, monkeypatch):
+    monkeypatch.setenv("SHOPLITE_LOGS_SOURCE", "/run/desktop/mnt/host/c/logs")
+    monkeypatch.setenv("DEPLOYED_BY", "harness:exec123")
+    shell = FakeShell(images={"0.1.0"}, running={"version": "0.2.0", "commit_sha": "c0ffee1"})
+    event = shoplite.deploy("0.1.0", runner=shell, wait=healthy("0.1.0", "aaa1111"))
+    run = next(c for c in shell.calls if c[:2] == ["docker", "run"])
+    assert "type=bind,source=/run/desktop/mnt/host/c/logs,target=/logs" in run
+    assert event["deployed_by"] == "harness:exec123"
+
+
+def test_deploy_from_make_is_recorded_as_make(monkeypatch):
+    monkeypatch.delenv("DEPLOYED_BY", raising=False)
+    event = shoplite.deploy("0.1.0", runner=FakeShell(images={"0.1.0"}), wait=healthy("0.1.0", "a"))
+    assert event["deployed_by"] == "make"

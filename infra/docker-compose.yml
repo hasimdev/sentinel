@@ -76,6 +76,29 @@ services:
     volumes:
       - ./alert-inbox/inbox.py:/app/inbox.py:ro
 
+  # Harness delegate: runs the shoplite-deploy pipeline's steps on this PC. Opt-in, so the
+  # rest of the stack works without Harness: `make harness-up` / `make harness-down`.
+  # It connects OUT to Harness (no ports). With docker.sock it can start and stop containers
+  # here, so only the Harness project's pipelines (run by people or the orchestrator after a
+  # CAB approval) should ever reach it.
+  harness-delegate:
+    profiles: ["harness"]
+    build: ./harness
+    user: root
+    mem_limit: 2g
+    cpus: 1
+    environment:
+      ACCOUNT_ID: ${HARNESS_ACCOUNT_ID:-}
+      DELEGATE_TOKEN: ${HARNESS_DELEGATE_TOKEN:-}
+      MANAGER_HOST_AND_PORT: ${HARNESS_MANAGER_URL:-https://app.harness.io}
+      DELEGATE_NAME: sentinel-laptop
+      DELEGATE_TAGS: sentinel-laptop
+      DELEGATE_TYPE: DOCKER
+      NEXT_GEN: "true"
+      SENTINEL_LOGS_DIR: ${SENTINEL_HOST_LOGS:-}  # the logs folder as Docker sees it
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+
 volumes:
   prometheus-data:
   grafana-data:

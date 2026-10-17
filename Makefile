@@ -13,7 +13,7 @@ export COMMIT_SHA ?= $(shell git rev-parse --short HEAD)
 
 COMPOSE := docker compose -f infra/docker-compose.yml --env-file .env
 
-.PHONY: dev test lint run-shoplite traffic infra-up infra-down infra-check alerts run-orchestrator incidents release deploy shoplite-status shoplite-stop
+.PHONY: dev test lint run-shoplite traffic infra-up infra-down infra-check alerts run-orchestrator incidents release deploy shoplite-status shoplite-stop deployer harness-up harness-down harness-pipeline
 
 dev:
 	$(BOOTSTRAP) -m venv .venv
@@ -77,3 +77,21 @@ shoplite-status:
 
 shoplite-stop:
 	$(PY) -m deploy.shoplite stop
+
+# --- Harness (Part 2, Step D): pipelines deploy through a delegate on this PC ---
+# The deploy code packaged for the delegate to run (same code as `make deploy`).
+deployer:
+	docker build -t sentinel/deployer:local -f deploy/Dockerfile .
+
+# Start / stop the Harness delegate. Needs HARNESS_ACCOUNT_ID and HARNESS_DELEGATE_TOKEN in .env.
+harness-up: export SENTINEL_HOST_LOGS ?= $(shell $(PY) -m deploy.shoplite host-path)
+harness-up: deployer
+	$(COMPOSE) --profile harness up -d --build harness-delegate
+	@echo Delegate starting. It shows as connected in Harness after about a minute.
+
+# Create/update the pipeline in Harness from infra/harness/shoplite-deploy.pipeline.yaml.
+harness-pipeline:
+	$(PY) infra/harness/sync_pipeline.py
+
+harness-down:
+	$(COMPOSE) --profile harness stop harness-delegate

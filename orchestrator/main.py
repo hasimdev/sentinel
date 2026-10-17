@@ -10,6 +10,7 @@ from mcp_server.tools import make_toolbox
 from orchestrator.adapters.base import LogSource, MetricSource
 from orchestrator.adapters.change_mgmt import ChangeMgmt, ServiceNowChangeMgmt
 from orchestrator.adapters.chat import Chat, SlackChat
+from orchestrator.adapters.deploy_control import DeployControl, HarnessDeployControl
 from orchestrator.adapters.loki import LokiLogSource
 from orchestrator.adapters.prometheus import PrometheusMetricSource
 from orchestrator.adapters.ticketing import JiraTicketing, Ticketing
@@ -28,6 +29,7 @@ def create_app(
     chat: Chat | None = None,
     ticketing: Ticketing | None = None,
     change_mgmt: ChangeMgmt | None = None,
+    deploy_control: DeployControl | None = None,
 ) -> FastAPI:
     settings = settings or load_settings()
     log = configure_logging(settings.tags(), settings.log_file, name="orchestrator")
@@ -63,6 +65,15 @@ def create_app(
             settings.servicenow_change_group,
         )
 
+    if deploy_control is None and settings.harness_ready():
+        deploy_control = HarnessDeployControl(
+            settings.harness_account_id,
+            settings.harness_api_key.get_secret_value(),
+            settings.harness_org,
+            settings.harness_project,
+            settings.harness_pipeline,
+        )
+
     service = IncidentService(
         store=store,
         metrics=metrics,
@@ -74,6 +85,8 @@ def create_app(
         dashboard_url=f"{settings.grafana_url.rstrip('/')}/d/shoplite",
         ticketing=ticketing,
         change_mgmt=change_mgmt,
+        deploy_control=deploy_control,
+        deploy_log=settings.deploy_log_path,
     )
 
     @asynccontextmanager

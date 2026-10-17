@@ -42,8 +42,8 @@ Deferred: web dashboard.
 | A. Versioned releases (good 0.1.0, buggy 0.2.0), make deploy / rollback | Done |
 | B. Jira follow-up tickets | Done |
 | C. ServiceNow incident, emergency change, CAB approval from Slack | Done |
-| D. Harness deploy and real rollback after Slack approval | Next |
-| E. Measure the approval step; full demo | |
+| D. Harness deploy and real rollback after Slack approval | Done |
+| E. Measure the approval step; full demo | Next |
 
 ## Monitoring locally
 

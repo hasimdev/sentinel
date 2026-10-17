@@ -80,6 +80,18 @@ class RecordRef(BaseModel):
     url: str
 
 
+class RollbackRun(BaseModel):
+    """A real rollback, run by the deploy tool (Harness) after a CAB approval."""
+
+    target_version: str
+    run_id: str
+    url: str
+    status: Literal["running", "succeeded", "failed"] = "running"
+    started_at: datetime
+    finished_at: datetime | None = None
+    error: str | None = None
+
+
 class Decision(BaseModel):
     action: Literal["approved", "rejected"]
     recommendation: str | None = None  # what the AI recommended at the time
@@ -111,3 +123,4 @@ class Incident(BaseModel):
     followup: TicketRef | None = None  # the ticket to fix the root cause properly
     itsm_incident: RecordRef | None = None  # the incident record in ServiceNow
     change: RecordRef | None = None  # emergency change raised when the AI recommends rollback
+    rollback: RollbackRun | None = None  # the real rollback, once a CAB approver approved

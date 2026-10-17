@@ -143,6 +143,17 @@ def incident_message(incident: Incident, dashboard_url: str) -> tuple[str, list[
         d = incident.decision
         mark = ":white_check_mark:" if d.action == "approved" else ":x:"
         status_lines.append(f"{mark} {d.outcome} ({_time(d.at)})")
+    if incident.rollback:
+        r = incident.rollback
+        run = f"<{r.url}|Harness run>"
+        status_lines.append(
+            {
+                "running": f":arrows_counterclockwise: Rolling back to {r.target_version} ({run})",
+                "succeeded": f":white_check_mark: Rolled back to {r.target_version} "
+                f"at {_time(r.finished_at)} ({run})",
+                "failed": f":x: Rollback to {r.target_version} failed ({run})",
+            }[r.status]
+        )
     if incident.status == "resolved":
         status_lines.append(f":large_green_circle: Resolved at {_time(incident.resolved_at)}")
     status_lines.append("Sentinel only recommends. Nothing changes until a person approves.")

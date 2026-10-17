@@ -171,3 +171,24 @@ Running notes on what I learned at each step.
   hasim.abu, via Sentinel"** on Abu Ansari's approval; the change moved to Scheduled and the
   other CAB approvals to "No longer required". After rollback the INC resolved itself with
   the cause, the decision and the Jira follow-up **SEN-2** in its close notes.
+
+## 2026-10-17 – Part 2, Step D: Harness does the real rollback
+- After a CAB approver clicks Approve, Sentinel now **actually rolls back**: it runs a Harness
+  pipeline, which a **delegate** (Harness's worker, in Docker on the laptop) carries out with
+  the same deploy code as `make deploy`. The change moves to Implement, then Closed with the
+  Harness run as proof.
+- **Which version to roll back to comes from the deploy history**, not from the AI.
+- **Least privilege, proven:** the orchestrator's Harness key can run the pipeline but not
+  edit it; Harness itself refused the edit ("missing core_pipeline_edit"). To create the
+  pipeline we granted edit rights for two minutes, then removed them and re-checked.
+- **Pipeline as code:** Harness's new editor rejected our classic YAML, so the pipeline is
+  created from the file in git through the API. The repo is the source of truth.
+- Pipeline inputs reach the script as environment variables, never pasted into the script,
+  so a crafted "version" can't run commands. A test enforces it.
+- Secrets slip-ups, again: a screenshot showed the delegate token (revoked, replaced), and a
+  duplicate empty line in `.env` (mine) hid the real token. Check `.env` by key, not by eye.
+- Live run (incident #3): bad release 06:19 → alert 06:20:33 → AI said roll back (high
+  confidence) and CHG0030009 went to the CAB at 06:21 → **approved in Slack 06:24:06** →
+  Harness rolled back to 0.1.0 in **16 s** → change **Closed / Successful** with the run link
+  → INC0010003 resolved 06:25 → Jira **SEN-3**. Human decision time: ~3 minutes; machine
+  time after the click: ~1 minute.

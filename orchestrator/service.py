@@ -2,6 +2,8 @@
 
 import logging
 import threading
+import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 
 from pydantic import BaseModel, Field
@@ -9,8 +11,10 @@ from pydantic import BaseModel, Field
 from orchestrator.adapters.base import AdapterError, LogSource, MetricSource
 from orchestrator.adapters.change_mgmt import Approver, ChangeMgmt
 from orchestrator.adapters.chat import Chat
+from orchestrator.adapters.deploy_control import DeployControl, DeployRun
 from orchestrator.adapters.ticketing import Ticketing
 from orchestrator.changes import diagnosis_note, incident_record, resolution_notes, rollback_change
+from orchestrator.deploy_history import rollback_target
 from orchestrator.evidence import gather_evidence
 from orchestrator.messages import incident_message
 from orchestrator.models import (
@@ -19,6 +23,7 @@ from orchestrator.models import (
     Decision,
     Incident,
     RecordRef,
+    RollbackRun,
     TicketRef,
     TriageResult,
 )
@@ -30,19 +35,23 @@ class NotAllowed(Exception):
     """A click that must not be recorded; the message says why, for the person who clicked."""
 
 
+SIMULATED = "Simulated: no deploy tool is connected yet, so nothing was rolled back."
+
+
 def _outcome(
     action: str,
     recommendation: str | None,
     user_id: str,
     change: RecordRef | None = None,
     approver: Approver | None = None,
+    deploys: bool = False,
 ) -> str:
     who = f"<@{user_id}>"
     if change and approver and action == "approve":
+        then = "Harness is rolling back now." if deploys else SIMULATED
         return (
             f"Rollback approved by {who} as CAB approver {approver.name}; the approval is "
-            f"recorded on {change.number}. Simulated: no deploy tool is connected yet, "
-            "so nothing was rolled back."
+            f"recorded on {change.number}. {then}"
         )
     if change and approver:
         return (
@@ -52,15 +61,17 @@ def _outcome(
     if action != "approve":
         return f"{who} rejected the AI's recommendation. No action taken."
     if recommendation == "rollback":
-        return (
-            f"Rollback approved by {who}. Simulated: no deploy tool is connected yet, "
-            "so nothing was rolled back."
-        )
+        # Real rollbacks need an approved change; without one this stays simulated.
+        return f"Rollback approved by {who}. {SIMULATED}"
     if recommendation == "investigate":
         return f"{who} agreed to investigate."
     if recommendation == "no_action":
         return f"{who} agreed no action is needed."
     return f"Approved by {who}."
+
+
+def _in_thread(job: Callable[[], None]) -> None:
+    threading.Thread(target=job, daemon=True).start()
 
 
 class WebhookResult(BaseModel):
@@ -82,9 +93,20 @@ class IncidentService:
         dashboard_url: str = "http://127.0.0.1:3000/d/shoplite",
         ticketing: Ticketing | None = None,
         change_mgmt: ChangeMgmt | None = None,
+        deploy_control: DeployControl | None = None,
+        deploy_log: str = "logs/deploys.log",
+        background: Callable[[Callable[[], None]], None] | None = None,
+        rollback_poll_s: float = 5.0,
+        rollback_timeout_s: float = 600.0,
     ) -> None:
         self.ticketing = ticketing
         self.change_mgmt = change_mgmt
+        # Real rollbacks run only with both: a deploy tool AND ServiceNow to approve the change.
+        self.deploy_control = deploy_control if change_mgmt is not None else None
+        self.deploy_log = deploy_log
+        self._background = background or _in_thread
+        self.rollback_poll_s = rollback_poll_s
+        self.rollback_timeout_s = rollback_timeout_s
         self.store = store
         self.metrics = metrics
         self.logs = logs
@@ -361,6 +383,7 @@ class IncidentService:
                     user_id,
                     incident.change if approver else None,
                     approver,
+                    deploys=self.deploy_control is not None,
                 ),
             )
             self.store.save(incident)
@@ -388,7 +411,133 @@ class IncidentService:
                 f"{incident.decision.action} the AI recommendation ({recommendation}).",
             )
         self.notify(incident_id)
+        if approver and approve and self.deploy_control is not None:
+            # A rollback takes a minute or two; don't keep the Slack click waiting.
+            self._background(lambda: self.execute_rollback(incident_id))
         return incident.decision, False
+
+    # --- the real rollback (only after a CAB approver approved the change) ---
+
+    def execute_rollback(self, incident_id: int) -> None:
+        """Roll back through the deploy tool and close the change. Never raises."""
+        incident = self.store.get(incident_id)
+        if (
+            incident is None
+            or self.deploy_control is None
+            or incident.rollback is not None
+            or incident.change is None
+            or incident.decision is None
+            or incident.decision.action != "approved"
+        ):
+            return
+        change = incident.change
+        target = rollback_target(self.deploy_log, incident.service, incident.version)
+        if target is None:
+            self._rollback_not_started(
+                incident,
+                f"the deploy history doesn't show which version ran before {incident.version}",
+                implementing=False,
+            )
+            return
+        implementing = self._servicenow(
+            incident,
+            self.change_mgmt.start_implementation,
+            change,
+            f"Sentinel is rolling back {incident.service} from {incident.version} to {target} "
+            "with Harness.",
+        )
+        reason = f"{change.number} approved for Sentinel incident #{incident.id}"
+        try:
+            run = self.deploy_control.start(target, reason)
+        except AdapterError as exc:
+            self._rollback_not_started(incident, f"Harness couldn't start it ({exc})", implementing)
+            return
+        incident = self.store.get(incident_id)
+        incident.rollback = RollbackRun(
+            target_version=target, run_id=run.run_id, url=run.url, started_at=datetime.now(UTC)
+        )
+        self.store.save(incident)
+        self._log("rollback started", incident, target_version=target, run_id=run.run_id)
+        self._reply(
+            incident,
+            f":arrows_counterclockwise: Harness is rolling back {incident.service} to "
+            f"{target}: <{run.url}|watch the run>",
+        )
+        self.notify(incident_id)
+
+        status = self._wait_for(run, incident)
+        incident = self.store.get(incident_id)
+        rollback = incident.rollback
+        rollback.status = "succeeded" if status == "succeeded" else "failed"
+        rollback.finished_at = datetime.now(UTC)
+        if status == "running":
+            minutes = round(self.rollback_timeout_s / 60)
+            rollback.error = f"no result from Harness within {minutes} minutes"
+        self.store.save(incident)
+        ok = rollback.status == "succeeded"
+        self._log("rollback finished", incident, rollback_status=rollback.status)
+
+        approver = incident.decision.by_name
+        notes = (
+            f"Rolled back {incident.service} from {incident.version} to {target} with Harness: "
+            f"{run.url}. Approved in Slack by {approver}."
+            if ok
+            else f"Rollback to {target} failed in Harness ({rollback.error or run.url}). "
+            "A person needs to take over."
+        )
+        self._servicenow(incident, self.change_mgmt.close_change, change, ok, notes)
+        if ok:
+            text = (
+                f":white_check_mark: Rollback done: {incident.service} {target} is running. "
+                f"{change.number} closed as successful."
+            )
+        else:
+            text = (
+                f":x: Rollback to {target} failed (<{run.url}|see the Harness run>). "
+                f"{change.number} closed as unsuccessful. A person needs to take over."
+            )
+        self._reply(incident, text)
+        self.notify(incident_id)
+
+    def _wait_for(self, run: DeployRun, incident: Incident) -> str:
+        """Poll the deploy tool until the run finishes; 'running' if it never does in time."""
+        deadline = time.monotonic() + self.rollback_timeout_s
+        while time.monotonic() < deadline:
+            try:
+                status = self.deploy_control.status(run)
+            except AdapterError as exc:  # a blip while polling: keep trying until the deadline
+                self._log("rollback status failed", incident, deploy_error=str(exc))
+                status = "running"
+            if status != "running":
+                return status
+            time.sleep(self.rollback_poll_s)
+        return "running"
+
+    def _rollback_not_started(self, incident: Incident, why: str, implementing: bool) -> None:
+        """Nothing was deployed. A change already in Implement is closed as unsuccessful;
+        one still Scheduled can only be cancelled (ServiceNow allows no other way out)."""
+        self._log("rollback not started", incident, reason=why)
+        note = f"Not rolled back: {why}. A person needs to take over."
+        if implementing:
+            self._servicenow(incident, self.change_mgmt.close_change, incident.change, False, note)
+            ended = "closed as unsuccessful"
+        else:
+            self._servicenow(incident, self.change_mgmt.cancel_change, incident.change, note)
+            ended = "cancelled"
+        self._reply(
+            incident,
+            f":x: Nothing was rolled back: {why}. {incident.change.number} {ended}. "
+            "A person needs to take over.",
+        )
+
+    def _reply(self, incident: Incident, text: str) -> None:
+        """Reply in the incident's chat thread. Never raises."""
+        if self.chat is None or incident.chat is None:
+            return
+        try:
+            self.chat.reply(incident.chat, text)
+        except AdapterError as exc:
+            self._log("chat failed", incident, chat_error=str(exc))
 
     def _verify_approver(self, incident: Incident, email: str | None) -> Approver:
         """The clicker, if ServiceNow is waiting on their approval; otherwise NotAllowed."""

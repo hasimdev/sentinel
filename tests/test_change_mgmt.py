@@ -98,6 +98,12 @@ class FakeServiceNow:
     def cancel_change(self, change, notes):
         self._record("cancel_change", change.number, notes)
 
+    def start_implementation(self, change, note):
+        self._record("start_implementation", change.number, note)
+
+    def close_change(self, change, successful, notes):
+        self._record("close_change", change.number, successful, notes)
+
 
 class FakeChat:
     def __init__(self):

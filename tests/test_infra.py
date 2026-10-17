@@ -17,10 +17,45 @@ def test_stack_has_all_services():
     assert {"prometheus", "grafana", "loki", "alloy"} <= services.keys()
 
 
+def _pinned(image: str) -> bool:
+    return ":" in image and not image.endswith(":latest")
+
+
 def test_images_are_pinned():
     for name, service in load_yaml("docker-compose.yml")["services"].items():
-        image = service["image"]
-        assert ":" in image and not image.endswith(":latest"), f"{name} image must be pinned"
+        if "build" in service:  # built here: every FROM in its Dockerfile must be pinned
+            dockerfile = INFRA / service["build"] / "Dockerfile"
+            images = [
+                line.split()[1]
+                for line in dockerfile.read_text(encoding="utf-8").splitlines()
+                if line.startswith("FROM ")
+            ]
+            assert images, f"{name} Dockerfile has no FROM"
+            assert all(_pinned(i) for i in images), f"{name} base images must be pinned"
+        else:
+            assert _pinned(service["image"]), f"{name} image must be pinned"
+
+
+def test_deployer_base_images_are_pinned():
+    dockerfile = INFRA.parent / "deploy" / "Dockerfile"
+    images = [ln.split()[1] for ln in dockerfile.read_text().splitlines() if ln.startswith("FROM ")]
+    assert images and all(_pinned(i) for i in images)
+
+
+def test_harness_delegate_is_opt_in_and_has_no_ports():
+    delegate = load_yaml("docker-compose.yml")["services"]["harness-delegate"]
+    assert delegate["profiles"] == ["harness"]  # `make infra-up` works without Harness
+    assert "ports" not in delegate  # it connects out; nothing connects in
+    assert delegate["environment"]["DELEGATE_TOKEN"].startswith("${HARNESS_DELEGATE_TOKEN")
+
+
+def test_pipeline_never_pastes_inputs_into_the_script():
+    pipeline = load_yaml("harness/shoplite-deploy.pipeline.yaml")["pipeline"]
+    step = pipeline["stages"][0]["stage"]["spec"]["execution"]["steps"][0]["step"]["spec"]
+    script = step["source"]["spec"]["script"]
+    assert "<+" not in script  # Harness expressions would be pasted in as shell code
+    assert {v["name"] for v in step["environmentVariables"]} == {"VERSION", "REASON", "RUN_ID"}
+    assert step["delegateSelectors"] == ["sentinel-laptop"]
 
 
 def test_published_ports_are_local_only():

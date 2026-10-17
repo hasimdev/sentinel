@@ -8,10 +8,17 @@ Each deploy is recorded in logs/deploys.log (shipped to Loki) with the four stan
   python -m deploy.shoplite deploy 0.2.0    # run that version (replaces the current one)
   python -m deploy.shoplite status          # which version is running
   python -m deploy.shoplite stop
+  python -m deploy.shoplite host-path       # the logs folder as Docker sees it (for Harness)
+
+Harness runs the same `deploy` inside the sentinel/deployer container (deploy/Dockerfile),
+so three settings can come from the environment there: SHOPLITE_LOGS_SOURCE (the logs folder
+as Docker sees it), SHOPLITE_HEALTH_URL, and DEPLOYED_BY (who ran it, kept in the deploy log).
 """
 
 import argparse
 import json
+import os
+import re
 import subprocess
 import sys
 import tarfile
@@ -29,6 +36,8 @@ CONTAINER = "sentinel-shoplite"
 PORT = 8000
 DEPLOY_LOG = ROOT / "logs" / "deploys.log"
 
+VERSION = re.compile(r"^\d+\.\d+\.\d+$")
+
 Runner = Callable[[list[str]], str]
 
 
@@ -41,6 +50,25 @@ def run(cmd: list[str]) -> str:
     if result.returncode != 0:
         raise ReleaseError(f"{' '.join(cmd[:3])} failed: {result.stderr.strip()[:500]}")
     return result.stdout.strip()
+
+
+def check_version(version: str) -> str:
+    """Only a plain x.y.z version gets anywhere near a command line."""
+    if not VERSION.fullmatch(version):
+        raise ReleaseError(f"Not a version: {version!r} (expected e.g. 0.1.0)")
+    return version
+
+
+def docker_host_path(path: Path) -> str:
+    """A folder as Docker Desktop on Windows sees it from inside a container.
+
+    C:/Users/me/logs (written with backslashes) -> /run/desktop/mnt/host/c/Users/me/logs
+    """
+    text = str(path)
+    if re.match(r"^[A-Za-z]:\\", text):
+        drive, rest = text[0].lower(), text[3:].replace("\\", "/")
+        return f"/run/desktop/mnt/host/{drive}/{rest}"
+    return text
 
 
 def tag_for(version: str) -> str:
@@ -65,7 +93,7 @@ def commit_of(version: str, runner: Runner = run) -> str:
 
 def release(version: str, runner: Runner = run) -> str:
     """Build the image for `version` from its Git tag. Returns the commit it was built from."""
-    sha = commit_of(version, runner)
+    sha = commit_of(check_version(version), runner)
     with tempfile.TemporaryDirectory() as tmp:
         archive = Path(tmp) / "source.tar"
         source = Path(tmp) / "source"
@@ -107,10 +135,11 @@ def current(runner: Runner = run) -> dict | None:
 
 
 def wait_healthy(timeout_s: float = 30.0) -> dict:
+    health_url = os.environ.get("SHOPLITE_HEALTH_URL", f"http://127.0.0.1:{PORT}/health")
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         try:
-            resp = httpx2.get(f"http://127.0.0.1:{PORT}/health", timeout=2)
+            resp = httpx2.get(health_url, timeout=2)
             if resp.status_code == 200:
                 return resp.json()
         except httpx2.HTTPError:
@@ -127,6 +156,8 @@ def record(event: dict) -> None:
 
 def deploy(version: str, runner: Runner = run, wait: Callable[[], dict] = wait_healthy) -> dict:
     """Run `version` in place of whatever runs now. Returns the deploy event."""
+    check_version(version)
+    logs_source = os.environ.get("SHOPLITE_LOGS_SOURCE") or str(ROOT / "logs")
     try:
         runner(["docker", "image", "inspect", f"{IMAGE}:{version}"])
     except ReleaseError as exc:
@@ -144,7 +175,7 @@ def deploy(version: str, runner: Runner = run, wait: Callable[[], dict] = wait_h
             "docker", "run", "-d",
             "--name", CONTAINER,
             "-p", f"127.0.0.1:{PORT}:8000",
-            "--mount", f"type=bind,source={ROOT / 'logs'},target=/logs",
+            "--mount", f"type=bind,source={logs_source},target=/logs",
             "-e", "ENV=local",
             "-e", "SHOPLITE_LOG_FILE=/logs/shoplite.log",
             f"{IMAGE}:{version}",
@@ -170,6 +201,7 @@ def deploy(version: str, runner: Runner = run, wait: Callable[[], dict] = wait_h
         "action": action,
         "previous_version": previous.get("version") if previous else None,
         "previous_commit_sha": previous.get("commit_sha") if previous else None,
+        "deployed_by": os.environ.get("DEPLOYED_BY", "make"),
     }
     record(event)
     return event
@@ -183,6 +215,7 @@ def main() -> None:
     for name in ("release", "deploy"):
         sub.add_parser(name).add_argument("version")
     sub.add_parser("status")
+    sub.add_parser("host-path")
     sub.add_parser("stop")
     args = parser.parse_args()
     try:
@@ -202,6 +235,8 @@ def main() -> None:
                 if now
                 else "ShopLite is not running"
             )
+        elif args.command == "host-path":
+            print(docker_host_path(ROOT / "logs"))
         elif args.command == "stop":
             run(["docker", "rm", "-f", CONTAINER])
             print("ShopLite stopped")

@@ -1,0 +1,70 @@
+# Harness pipeline: deploy one ShopLite version on this PC (a rollback = an older version).
+# Sent to Harness by `make harness-pipeline` (pipeline as code: this file is what runs).
+# It runs on the delegate tagged sentinel-laptop (infra/docker-compose.yml, profile "harness"),
+# which runs the same deploy code as `make deploy`, packaged as the sentinel/deployer image.
+pipeline:
+  name: shoplite-deploy
+  identifier: shoplite_deploy
+  projectIdentifier: sentinel
+  orgIdentifier: default
+  tags: {}
+  variables:
+    - name: version
+      type: String
+      description: ShopLite version to deploy, e.g. 0.1.0
+      required: true
+      value: <+input>
+    - name: reason
+      type: String
+      description: Why, e.g. the approved change request
+      required: false
+      value: <+input>.default(manual run)
+  stages:
+    - stage:
+        name: Deploy ShopLite
+        identifier: deploy_shoplite
+        type: Custom
+        spec:
+          execution:
+            steps:
+              - step:
+                  type: ShellScript
+                  name: Deploy version
+                  identifier: deploy_version
+                  timeout: 5m
+                  spec:
+                    shell: Bash
+                    onDelegate: true
+                    source:
+                      type: Inline
+                      spec:
+                        # Inputs arrive as environment variables (below), never pasted into
+                        # the script text, so they can't be run as commands.
+                        script: |-
+                          set -euo pipefail
+                          # Only a plain x.y.z version gets anywhere near a command line.
+                          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                            echo "Not a version: $VERSION"; exit 1
+                          fi
+                          printf 'Deploying ShopLite %s. Reason: %s\n' "$VERSION" "$REASON"
+                          docker run --rm \
+                            -v /var/run/docker.sock:/var/run/docker.sock \
+                            -v "$SENTINEL_LOGS_DIR":/app/logs \
+                            -e SHOPLITE_LOGS_SOURCE="$SENTINEL_LOGS_DIR" \
+                            -e SHOPLITE_HEALTH_URL=http://host.docker.internal:8000/health \
+                            -e DEPLOYED_BY="harness:$RUN_ID" \
+                            sentinel/deployer:local deploy "$VERSION"
+                    environmentVariables:
+                      - name: VERSION
+                        type: String
+                        value: <+pipeline.variables.version>
+                      - name: REASON
+                        type: String
+                        value: <+pipeline.variables.reason>
+                      - name: RUN_ID
+                        type: String
+                        value: <+pipeline.executionId>
+                    outputVariables: []
+                    delegateSelectors:
+                      - sentinel-laptop
+        tags: {}

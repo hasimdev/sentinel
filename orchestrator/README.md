@@ -78,3 +78,17 @@ Instance quirks learned the hard way: change state changes must go through the C
 Management API (`/api/sn_chg_rest/change/...`), as the Table API is blocked by a
 state-transition rule; moving to *Authorize* needs an assignment group; on this instance the
 emergency CAB is the `CAB Approval` group.
+
+## Harness (real rollback after CAB approval)
+
+When a CAB approver approves the change, the rollback really happens. Sentinel takes the
+target from the deploy history (the version that ran before the bad one, not the AI's word),
+moves the change to *Implement*, runs the Harness `shoplite_deploy` pipeline with that version,
+watches it, and closes the change as *successful* (with the Harness run link) or
+*unsuccessful*. Slack shows each step in the incident's thread and message. If there's no known
+previous version or Harness won't start, nothing is deployed, the change is cancelled or
+closed as unsuccessful, and Slack says a person must take over.
+
+Real rollbacks need both Harness (`HARNESS_ACCOUNT_ID`, `HARNESS_API_KEY`) and ServiceNow:
+without a ServiceNow-verified approval, rollbacks stay simulated. Optional settings:
+`HARNESS_ORG`, `HARNESS_PROJECT`, `HARNESS_PIPELINE`, `DEPLOY_LOG_PATH`. Setup: deploy/README.md.
