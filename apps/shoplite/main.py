@@ -46,8 +46,12 @@ PROMO_PRICES = {"mug": 900, "tee": 2000}
 
 
 def promo_price(product: Product) -> int:
-    """Price after the autumn promo."""
-    return PROMO_PRICES[product.id]
+    """Price after the autumn promo; products not on promo keep their normal price.
+
+    0.2.1 fix: 0.2.0 looked every product up in PROMO_PRICES, so checkout crashed with a
+    KeyError for products without a promo (cap, sticker).
+    """
+    return PROMO_PRICES.get(product.id, product.price_cents)
 
 
 _rng = secrets.SystemRandom()

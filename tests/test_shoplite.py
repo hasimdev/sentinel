@@ -39,6 +39,17 @@ def test_checkout_success():
     assert body["order_id"]
 
 
+@pytest.mark.parametrize(
+    ("product_id", "unit_cents"),
+    [("mug", 900), ("tee", 2000), ("cap", 1800), ("sticker", 500)],
+)
+def test_every_product_checks_out_at_promo_or_normal_price(product_id, unit_cents):
+    # 0.2.0 crashed for products without a promo price (cap, sticker); 0.2.1 fixes that.
+    resp = make_client().post("/checkout", json={"product_id": product_id, "quantity": 2})
+    assert resp.status_code == 200
+    assert resp.json()["total_cents"] == 2 * unit_cents
+
+
 def test_checkout_unknown_product_is_rejected():
     resp = make_client().post("/checkout", json={"product_id": "spaceship"})
     assert resp.status_code == 404
