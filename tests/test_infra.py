@@ -54,7 +54,12 @@ def test_pipeline_never_pastes_inputs_into_the_script():
     step = pipeline["stages"][0]["stage"]["spec"]["execution"]["steps"][0]["step"]["spec"]
     script = step["source"]["spec"]["script"]
     assert "<+" not in script  # Harness expressions would be pasted in as shell code
-    assert {v["name"] for v in step["environmentVariables"]} == {"VERSION", "REASON", "RUN_ID"}
+    assert {v["name"] for v in step["environmentVariables"]} == {
+        "VERSION",
+        "REASON",
+        "CHANGE",
+        "RUN_ID",
+    }
     assert step["delegateSelectors"] == ["sentinel-laptop"]
 
 
@@ -112,6 +117,19 @@ def test_alerting_services_are_wired_together():
         "http://alert-inbox:8080/alerts",
     }
     assert all(w["send_resolved"] is True for w in urls.values())
+
+
+def test_warning_rule_is_lower_and_silenced_by_the_critical_one():
+    rules = {
+        r["alert"]: r for r in load_yaml("prometheus/rules/shoplite.yml")["groups"][0]["rules"]
+    }
+    warning = rules["ShopLiteElevatedErrorRate"]
+    assert warning["labels"]["severity"] == "warning"
+    assert "> 0.05" in warning["expr"] and warning["for"] == "2m"
+    inhibit = load_yaml("alertmanager/alertmanager.yml")["inhibit_rules"][0]
+    assert inhibit["source_matchers"] == ['severity="critical"']
+    assert inhibit["target_matchers"] == ['severity="warning"']
+    assert set(inhibit["equal"]) == {"service", "env", "version", "commit_sha"}
 
 
 def test_high_error_rate_rule_matches_the_agreed_threshold():

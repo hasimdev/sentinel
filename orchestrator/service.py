@@ -13,9 +13,9 @@ from orchestrator.adapters.change_mgmt import Approver, ChangeMgmt
 from orchestrator.adapters.chat import Chat
 from orchestrator.adapters.deploy_control import DeployControl, DeployRun
 from orchestrator.adapters.ticketing import Ticketing
-from orchestrator.changes import diagnosis_note, incident_record, resolution_notes, rollback_change
-from orchestrator.deploy_history import rollback_target
-from orchestrator.evidence import gather_evidence
+from orchestrator.changes import diagnosis_note, incident_record, resolution_notes
+from orchestrator.deploy_history import release_of
+from orchestrator.evidence import gather_evidence, recent_error_rate_query
 from orchestrator.messages import incident_message
 from orchestrator.models import (
     Alert,
@@ -45,8 +45,16 @@ def _outcome(
     change: RecordRef | None = None,
     approver: Approver | None = None,
     deploys: bool = False,
+    on_call: str | None = None,
 ) -> str:
     who = f"<@{user_id}>"
+    if on_call and action == "approve":
+        return (
+            f"Rollback approved by {who} (on call: {on_call}). No new change needed: a rollback "
+            "backs out the release's own change. Harness is rolling back now."
+        )
+    if on_call:
+        return f"{who} (on call: {on_call}) rejected the rollback. No action taken."
     if change and approver and action == "approve":
         then = "Harness is rolling back now." if deploys else SIMULATED
         return (
@@ -98,15 +106,27 @@ class IncidentService:
         background: Callable[[Callable[[], None]], None] | None = None,
         rollback_poll_s: float = 5.0,
         rollback_timeout_s: float = 600.0,
+        oncall_group: str = "ShopLite On-Call",
+        validate_for_s: float = 120.0,
+        validate_timeout_s: float = 600.0,
+        validate_poll_s: float = 15.0,
+        healthy_error_rate: float = 0.05,
     ) -> None:
         self.ticketing = ticketing
         self.change_mgmt = change_mgmt
-        # Real rollbacks run only with both: a deploy tool AND ServiceNow to approve the change.
+        # Real rollbacks run only with both: a deploy tool AND ServiceNow, which checks that the
+        # person approving is on call and holds the release's change record.
         self.deploy_control = deploy_control if change_mgmt is not None else None
         self.deploy_log = deploy_log
         self._background = background or _in_thread
         self.rollback_poll_s = rollback_poll_s
         self.rollback_timeout_s = rollback_timeout_s
+        self.oncall_group = oncall_group
+        # A rollback is validated once the error rate stays under this for validate_for_s.
+        self.validate_for_s = validate_for_s
+        self.validate_timeout_s = validate_timeout_s
+        self.validate_poll_s = validate_poll_s
+        self.healthy_error_rate = healthy_error_rate
         self.store = store
         self.metrics = metrics
         self.logs = logs
@@ -184,14 +204,14 @@ class IncidentService:
 
     def investigate(self, incident_id: int) -> None:
         """Background job for a new incident: record it in ServiceNow, gather evidence,
-        AI triage, raise a change if a rollback is recommended, then tell people."""
+        AI triage, note the diagnosis, then tell people."""
         self.open_itsm_incident(incident_id)
         self.attach_evidence(incident_id)
         self.run_triage(incident_id)
         self.record_diagnosis(incident_id)
         self.notify(incident_id)
 
-    # --- ServiceNow: the incident record and the emergency change ---
+    # --- ServiceNow: the incident record ---
     # These run in the orchestrator, never in the AI. None of them raise: ServiceNow being
     # down must not break incident handling.
 
@@ -210,33 +230,16 @@ class IncidentService:
         self._log("servicenow incident opened", incident, servicenow_incident=ref.number)
 
     def record_diagnosis(self, incident_id: int) -> None:
-        """Add the AI diagnosis to the ServiceNow incident. If it recommends a rollback,
-        raise an emergency change and send it to the CAB for approval."""
+        """Add the AI diagnosis to the ServiceNow incident.
+
+        A rollback raises no change: it backs out the change the release was deployed under.
+        """
         incident = self.store.get(incident_id)
-        if self.change_mgmt is None or incident is None:
+        if self.change_mgmt is None or incident is None or incident.itsm_incident is None:
             return
-        if incident.itsm_incident is not None:
-            self._servicenow(
-                incident,
-                self.change_mgmt.add_note,
-                incident.itsm_incident,
-                diagnosis_note(incident),
-            )
-        diagnosis = incident.triage.diagnosis if incident.triage else None
-        if diagnosis is None or diagnosis.recommendation != "rollback" or incident.change:
-            return
-        try:
-            change = self.change_mgmt.create_emergency_change(rollback_change(incident))
-        except AdapterError as exc:
-            self._log("servicenow failed", incident, servicenow_error=str(exc))
-            return
-        incident = self.store.get(incident_id)
-        incident.change = change
-        self.store.save(incident)
-        self._log("emergency change raised", incident, change=change.number)
-        if incident.itsm_incident is not None:
-            self._servicenow(incident, self.change_mgmt.link_change, incident.itsm_incident, change)
-        self._servicenow(incident, self.change_mgmt.request_approval, change)
+        self._servicenow(
+            incident, self.change_mgmt.add_note, incident.itsm_incident, diagnosis_note(incident)
+        )
 
     def close_itsm_records(self, incident_id: int) -> None:
         """When the alert clears: resolve the ServiceNow incident, and cancel a change that
@@ -340,13 +343,14 @@ class IncidentService:
     ) -> tuple[Decision | None, bool]:
         """Record a person's decision. Returns (decision, was_already_decided).
 
-        The first decision wins; later clicks change nothing. When an emergency change is
-        waiting in ServiceNow, only a person ServiceNow asked to approve it may decide, and
-        their approval or rejection is recorded there under their own name; anyone else gets
-        NotAllowed. Approving a rollback is SIMULATED until a deploy tool is connected.
+        The first decision wins; later clicks change nothing. A rollback (real once a deploy
+        tool and ServiceNow are connected) may only be decided by a member of the on-call group
+        in ServiceNow; anyone else gets NotAllowed. It raises no new change: it backs out the
+        release's own change. Without a deploy tool, approving a rollback is SIMULATED.
         """
         approve = action == "approve"
         approver = None
+        on_call = None
         with self._decision_lock:
             incident = self.store.get(incident_id)
             if incident is None:
@@ -358,7 +362,9 @@ class IncidentService:
                 if incident.triage and incident.triage.diagnosis
                 else None
             )
-            if incident.change is not None and self.change_mgmt is not None:
+            if recommendation == "rollback" and self.deploy_control is not None:
+                on_call = self._verify_on_call(incident, email)
+            elif incident.change is not None and self.change_mgmt is not None:
                 approver = self._verify_approver(incident, email)
                 verb = "Approved" if approve else "Rejected"
                 try:
@@ -384,6 +390,7 @@ class IncidentService:
                     incident.change if approver else None,
                     approver,
                     deploys=self.deploy_control is not None,
+                    on_call=on_call,
                 ),
             )
             self.store.save(incident)
@@ -394,6 +401,7 @@ class IncidentService:
             recommendation=recommendation,
             decided_by=user_name,
             approver=approver.name if approver else None,
+            on_call=on_call,
         )
         if approver and not approve:
             self._servicenow(
@@ -407,61 +415,63 @@ class IncidentService:
                 incident,
                 self.change_mgmt.add_note,
                 incident.itsm_incident,
-                f"Decision in Slack by {approver.name if approver else user_name}: "
+                f"Decision in Slack by {on_call or (approver.name if approver else user_name)}: "
                 f"{incident.decision.action} the AI recommendation ({recommendation}).",
             )
         self.notify(incident_id)
-        if approver and approve and self.deploy_control is not None:
+        if on_call and approve:
             # A rollback takes a minute or two; don't keep the Slack click waiting.
             self._background(lambda: self.execute_rollback(incident_id))
         return incident.decision, False
 
-    # --- the real rollback (only after a CAB approver approved the change) ---
+    # --- the real rollback (only after an on-call engineer approved it) ---
 
     def execute_rollback(self, incident_id: int) -> None:
-        """Roll back through the deploy tool and close the change. Never raises."""
+        """Roll back through the deploy tool as the backout of the release's own change, then
+        check the error rate is back to normal. Never raises."""
         incident = self.store.get(incident_id)
         if (
             incident is None
             or self.deploy_control is None
             or incident.rollback is not None
-            or incident.change is None
             or incident.decision is None
             or incident.decision.action != "approved"
         ):
             return
-        change = incident.change
-        target = rollback_target(self.deploy_log, incident.service, incident.version)
-        if target is None:
+        release = release_of(self.deploy_log, incident.service, incident.version)
+        if release is None or release.previous_version is None:
             self._rollback_not_started(
                 incident,
                 f"the deploy history doesn't show which version ran before {incident.version}",
-                implementing=False,
             )
             return
-        implementing = self._servicenow(
-            incident,
-            self.change_mgmt.start_implementation,
-            change,
-            f"Sentinel is rolling back {incident.service} from {incident.version} to {target} "
-            "with Harness.",
+        target, change_number = release.previous_version, release.change
+        change = self._find_change(incident, change_number)
+        reason = (
+            f"Backout of {change_number} for Sentinel incident #{incident.id}"
+            if change_number
+            else f"Backout of release {incident.version} for Sentinel incident #{incident.id}"
         )
-        reason = f"{change.number} approved for Sentinel incident #{incident.id}"
         try:
-            run = self.deploy_control.start(target, reason)
+            run = self.deploy_control.start(target, reason, change=change_number)
         except AdapterError as exc:
-            self._rollback_not_started(incident, f"Harness couldn't start it ({exc})", implementing)
+            self._rollback_not_started(incident, f"Harness couldn't start it ({exc})")
             return
         incident = self.store.get(incident_id)
         incident.rollback = RollbackRun(
-            target_version=target, run_id=run.run_id, url=run.url, started_at=datetime.now(UTC)
+            target_version=target,
+            run_id=run.run_id,
+            url=run.url,
+            started_at=datetime.now(UTC),
+            release_change=change_number,
         )
         self.store.save(incident)
         self._log("rollback started", incident, target_version=target, run_id=run.run_id)
+        backs_out = f", backing out {change_number}" if change_number else ""
         self._reply(
             incident,
             f":arrows_counterclockwise: Harness is rolling back {incident.service} to "
-            f"{target}: <{run.url}|watch the run>",
+            f"{target}{backs_out}: <{run.url}|watch the run>",
         )
         self.notify(incident_id)
 
@@ -477,27 +487,98 @@ class IncidentService:
         ok = rollback.status == "succeeded"
         self._log("rollback finished", incident, rollback_status=rollback.status)
 
-        approver = incident.decision.by_name
-        notes = (
-            f"Rolled back {incident.service} from {incident.version} to {target} with Harness: "
-            f"{run.url}. Approved in Slack by {approver}."
-            if ok
-            else f"Rollback to {target} failed in Harness ({rollback.error or run.url}). "
-            "A person needs to take over."
-        )
-        self._servicenow(incident, self.change_mgmt.close_change, change, ok, notes)
+        who = incident.decision.by_name
         if ok:
-            text = (
-                f":white_check_mark: Rollback done: {incident.service} {target} is running. "
-                f"{change.number} closed as successful."
+            note = (
+                f"Backed out by Sentinel incident #{incident.id}: rolled back {incident.service} "
+                f"from {incident.version} to {target} with Harness ({run.url}), approved in "
+                f"Slack by {who}. No new change raised."
             )
         else:
-            text = (
-                f":x: Rollback to {target} failed (<{run.url}|see the Harness run>). "
-                f"{change.number} closed as unsuccessful. A person needs to take over."
+            note = (
+                f"Backout of {incident.version} failed in Harness "
+                f"({rollback.error or run.url}). A person needs to take over."
             )
-        self._reply(incident, text)
+        if change is not None:
+            self._servicenow(incident, self.change_mgmt.add_note, change, note)
+        if incident.itsm_incident is not None:
+            self._servicenow(incident, self.change_mgmt.add_note, incident.itsm_incident, note)
+        if ok:
+            self._reply(
+                incident,
+                f":white_check_mark: Rollback done: {incident.service} {target} is running. "
+                "Checking the error rate is back to normal...",
+            )
+            self.notify(incident_id)
+            self.validate_rollback(incident_id)
+        else:
+            self._reply(
+                incident,
+                f":x: Rollback to {target} failed (<{run.url}|see the Harness run>). "
+                "A person needs to take over.",
+            )
+            self.notify(incident_id)
+
+    def validate_rollback(self, incident_id: int) -> None:
+        """After a successful rollback: is the error rate back under the healthy level, and
+        does it stay there for validate_for_s? Records the answer. Never raises."""
+        incident = self.store.get(incident_id)
+        rollback = incident.rollback if incident else None
+        if rollback is None or rollback.status != "succeeded":
+            return
+        rollback.validation = "checking"
+        self.store.save(incident)
+        query = recent_error_rate_query(incident.service, incident.env, rollback.target_version)
+        healthy_since = None
+        deadline = time.monotonic() + self.validate_timeout_s
+        validated = False
+        while query and time.monotonic() < deadline:
+            try:
+                rate = self.metrics.instant(query)
+            except AdapterError as exc:
+                self._log("validation query failed", incident, metrics_error=str(exc))
+                rate = None
+            if rate is not None and rate < self.healthy_error_rate:
+                healthy_since = healthy_since or time.monotonic()
+                if time.monotonic() - healthy_since >= self.validate_for_s:
+                    validated = True
+                    break
+            elif rate is not None:
+                healthy_since = None  # errors came back: start the clock again
+            time.sleep(self.validate_poll_s)
+
+        incident = self.store.get(incident_id)
+        rollback = incident.rollback
+        rollback.validation = "validated" if validated else "not_validated"
+        rollback.validated_at = datetime.now(UTC) if validated else None
+        self.store.save(incident)
+        self._log("rollback validated" if validated else "rollback not validated", incident)
+        threshold = f"{self.healthy_error_rate:.0%}"
+        held = f"{round(self.validate_for_s / 60)} minutes"
+        if validated:
+            summary = (
+                f"Rollback validated: errors on {rollback.target_version} stayed under "
+                f"{threshold} for {held}."
+            )
+            self._reply(incident, f":white_check_mark: {summary}")
+        else:
+            summary = (
+                f"Rollback not validated: errors on {rollback.target_version} didn't stay "
+                f"under {threshold} for {held}. A person should check."
+            )
+            self._reply(incident, f":warning: {summary}")
+        if self.change_mgmt is not None and incident.itsm_incident is not None:
+            self._servicenow(incident, self.change_mgmt.add_note, incident.itsm_incident, summary)
         self.notify(incident_id)
+
+    def _find_change(self, incident: Incident, number: str | None) -> RecordRef | None:
+        if number is None or self.change_mgmt is None:
+            return None
+        try:
+            return self.change_mgmt.find_change(number)
+        except AdapterError as exc:
+            self._log("servicenow failed", incident, servicenow_error=str(exc))
+            return None
 
     def _wait_for(self, run: DeployRun, incident: Incident) -> str:
         """Poll the deploy tool until the run finishes; 'running' if it never does in time."""
@@ -513,22 +594,13 @@ class IncidentService:
             time.sleep(self.rollback_poll_s)
         return "running"
 
-    def _rollback_not_started(self, incident: Incident, why: str, implementing: bool) -> None:
-        """Nothing was deployed. A change already in Implement is closed as unsuccessful;
-        one still Scheduled can only be cancelled (ServiceNow allows no other way out)."""
+    def _rollback_not_started(self, incident: Incident, why: str) -> None:
+        """Nothing was deployed: say so in the thread and on the incident."""
         self._log("rollback not started", incident, reason=why)
         note = f"Not rolled back: {why}. A person needs to take over."
-        if implementing:
-            self._servicenow(incident, self.change_mgmt.close_change, incident.change, False, note)
-            ended = "closed as unsuccessful"
-        else:
-            self._servicenow(incident, self.change_mgmt.cancel_change, incident.change, note)
-            ended = "cancelled"
-        self._reply(
-            incident,
-            f":x: Nothing was rolled back: {why}. {incident.change.number} {ended}. "
-            "A person needs to take over.",
-        )
+        if self.change_mgmt is not None and incident.itsm_incident is not None:
+            self._servicenow(incident, self.change_mgmt.add_note, incident.itsm_incident, note)
+        self._reply(incident, f":x: Nothing was rolled back: {why}. A person needs to take over.")
 
     def _reply(self, incident: Incident, text: str) -> None:
         """Reply in the incident's chat thread. Never raises."""
@@ -538,6 +610,29 @@ class IncidentService:
             self.chat.reply(incident.chat, text)
         except AdapterError as exc:
             self._log("chat failed", incident, chat_error=str(exc))
+
+    def _verify_on_call(self, incident: Incident, email: str | None) -> str:
+        """The clicker's name, if ServiceNow lists them in the on-call group; else NotAllowed."""
+        group = self.oncall_group
+        if not email:
+            raise NotAllowed(
+                "Sentinel couldn't read your email from Slack, so ServiceNow can't confirm "
+                f"you're in {group}. Nothing was recorded."
+            )
+        try:
+            name = self.change_mgmt.group_member(email, group)
+        except AdapterError as exc:
+            self._log("servicenow failed", incident, servicenow_error=str(exc))
+            raise NotAllowed(
+                f"Couldn't reach ServiceNow to check you're on call ({exc}). "
+                "Nothing was recorded; please try again."
+            ) from exc
+        if name is None:
+            raise NotAllowed(
+                f"You're not in {group} in ServiceNow, so your click wasn't recorded. "
+                "Someone on call has to decide on this rollback."
+            )
+        return name
 
     def _verify_approver(self, incident: Incident, email: str | None) -> Approver:
         """The clicker, if ServiceNow is waiting on their approval; otherwise NotAllowed."""

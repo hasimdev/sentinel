@@ -15,3 +15,20 @@ groups:
         annotations:
           summary: "ShopLite error rate is {{ $value | humanizePercentage }} on version {{ $labels.version }} ({{ $labels.commit_sha }})"
           dashboard: "http://localhost:3000/d/shoplite"
+
+      # Lower-severity companion: more than 5% of requests fail for 2 minutes. Becomes a P3
+      # incident, which takes the normal change path (regular CAB). When the critical alert
+      # above also fires, Alertmanager suppresses this one (inhibit_rules), so one problem
+      # never opens two incidents.
+      - alert: ShopLiteElevatedErrorRate
+        expr: |
+          sum by (service, env, version, commit_sha) (rate(shoplite_http_requests_total{status=~"5.."}[1m]))
+            /
+          sum by (service, env, version, commit_sha) (rate(shoplite_http_requests_total[1m]))
+            > 0.05
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "ShopLite error rate is elevated: {{ $value | humanizePercentage }} on version {{ $labels.version }} ({{ $labels.commit_sha }})"
+          dashboard: "http://localhost:3000/d/shoplite"

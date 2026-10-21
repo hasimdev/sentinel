@@ -12,7 +12,8 @@ Each deploy is recorded in logs/deploys.log (shipped to Loki) with the four stan
 
 Harness runs the same `deploy` inside the sentinel/deployer container (deploy/Dockerfile),
 so three settings can come from the environment there: SHOPLITE_LOGS_SOURCE (the logs folder
-as Docker sees it), SHOPLITE_HEALTH_URL, and DEPLOYED_BY (who ran it, kept in the deploy log).
+as Docker sees it), SHOPLITE_HEALTH_URL, DEPLOYED_BY (who ran it) and CHANGE_NUMBER (the
+ServiceNow change it runs under; a rollback names the release change it backs out).
 """
 
 import argparse
@@ -37,6 +38,7 @@ PORT = 8000
 DEPLOY_LOG = ROOT / "logs" / "deploys.log"
 
 VERSION = re.compile(r"^\d+\.\d+\.\d+$")
+CHANGE = re.compile(r"^CHG\d{7}$")  # a ServiceNow change number
 
 Runner = Callable[[list[str]], str]
 
@@ -154,9 +156,25 @@ def record(event: dict) -> None:
         f.write(json.dumps(event) + "\n")
 
 
-def deploy(version: str, runner: Runner = run, wait: Callable[[], dict] = wait_healthy) -> dict:
-    """Run `version` in place of whatever runs now. Returns the deploy event."""
+def check_change(change: str | None) -> str | None:
+    if change and not CHANGE.fullmatch(change):
+        raise ReleaseError(f"Not a change number: {change!r} (expected e.g. CHG0031000)")
+    return change or None
+
+
+def deploy(
+    version: str,
+    runner: Runner = run,
+    wait: Callable[[], dict] = wait_healthy,
+    change: str | None = None,
+) -> dict:
+    """Run `version` in place of whatever runs now, under `change`. Returns the deploy event.
+
+    Every release should run under a ServiceNow change; a rollback names the change of the
+    release it backs out, so no new ticket is needed.
+    """
     check_version(version)
+    change = check_change(change or os.environ.get("CHANGE_NUMBER"))
     logs_source = os.environ.get("SHOPLITE_LOGS_SOURCE") or str(ROOT / "logs")
     try:
         runner(["docker", "image", "inspect", f"{IMAGE}:{version}"])
@@ -202,6 +220,7 @@ def deploy(version: str, runner: Runner = run, wait: Callable[[], dict] = wait_h
         "previous_version": previous.get("version") if previous else None,
         "previous_commit_sha": previous.get("commit_sha") if previous else None,
         "deployed_by": os.environ.get("DEPLOYED_BY", "make"),
+        "change": change,
     }
     record(event)
     return event
@@ -212,8 +231,10 @@ def main() -> None:
         description=__doc__, formatter_class=argparse.RawTextHelpFormatter
     )
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("release", "deploy"):
-        sub.add_parser(name).add_argument("version")
+    sub.add_parser("release").add_argument("version")
+    deploy_cmd = sub.add_parser("deploy")
+    deploy_cmd.add_argument("version")
+    deploy_cmd.add_argument("--change", help="ServiceNow change number, e.g. CHG0031000")
     sub.add_parser("status")
     sub.add_parser("host-path")
     sub.add_parser("stop")
@@ -222,7 +243,7 @@ def main() -> None:
         if args.command == "release":
             print(f"Built {IMAGE}:{args.version} from commit {release(args.version)}")
         elif args.command == "deploy":
-            event = deploy(args.version)
+            event = deploy(args.version, change=args.change)
             print(
                 f"{event['action'].title()} done: ShopLite {event['version']} "
                 f"({event['commit_sha']}) is running; "

@@ -81,7 +81,7 @@ class RecordRef(BaseModel):
 
 
 class RollbackRun(BaseModel):
-    """A real rollback, run by the deploy tool (Harness) after a CAB approval."""
+    """A real rollback, run by the deploy tool (Harness) after an on-call engineer approved."""
 
     target_version: str
     run_id: str
@@ -90,6 +90,12 @@ class RollbackRun(BaseModel):
     started_at: datetime
     finished_at: datetime | None = None
     error: str | None = None
+    # The change the bad release was deployed under. A rollback backs it out, so it needs no
+    # new ticket. None if the release was deployed without one.
+    release_change: str | None = None
+    # After a successful rollback: is the error rate back to normal?
+    validation: Literal["checking", "validated", "not_validated"] | None = None
+    validated_at: datetime | None = None
 
 
 class Decision(BaseModel):

@@ -140,3 +140,29 @@ def test_deploy_from_make_is_recorded_as_make(monkeypatch):
     monkeypatch.delenv("DEPLOYED_BY", raising=False)
     event = shoplite.deploy("0.1.0", runner=FakeShell(images={"0.1.0"}), wait=healthy("0.1.0", "a"))
     assert event["deployed_by"] == "make"
+
+
+def test_deploy_records_the_change_it_runs_under(deploy_log, monkeypatch):
+    monkeypatch.delenv("CHANGE_NUMBER", raising=False)
+    shell = FakeShell(images={"0.2.0"})
+    event = shoplite.deploy("0.2.0", runner=shell, wait=healthy("0.2.0", "c"), change="CHG0031001")
+    assert event["change"] == "CHG0031001"
+    assert json.loads(deploy_log.read_text().splitlines()[-1])["change"] == "CHG0031001"
+
+
+def test_deploy_in_a_container_takes_the_change_from_the_environment(monkeypatch):
+    monkeypatch.setenv("CHANGE_NUMBER", "CHG0031002")
+    event = shoplite.deploy("0.1.0", runner=FakeShell(images={"0.1.0"}), wait=healthy("0.1.0", "a"))
+    assert event["change"] == "CHG0031002"
+
+
+@pytest.mark.parametrize("bad", ["CHG1", "INC0010001", "CHG0031001; rm -rf /"])
+def test_only_real_change_numbers_are_recorded(bad):
+    with pytest.raises(ReleaseError, match="Not a change number"):
+        shoplite.deploy("0.1.0", runner=FakeShell(images={"0.1.0"}), change=bad)
+
+
+def test_deploy_without_a_change_records_none(monkeypatch):
+    monkeypatch.delenv("CHANGE_NUMBER", raising=False)
+    event = shoplite.deploy("0.1.0", runner=FakeShell(images={"0.1.0"}), wait=healthy("0.1.0", "a"))
+    assert event["change"] is None

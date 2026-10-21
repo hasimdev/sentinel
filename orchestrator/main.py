@@ -89,6 +89,7 @@ def create_app(
         change_mgmt=change_mgmt,
         deploy_control=deploy_control,
         deploy_log=settings.deploy_log_path,
+        oncall_group=settings.servicenow_oncall_group,
     )
 
     @asynccontextmanager

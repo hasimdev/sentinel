@@ -59,6 +59,7 @@ class FakeServiceNow:
         self.down, self.fail = down, set(fail)
         self.calls: list[tuple] = []
         self.approvers = {APPROVER_EMAIL: Approver(approval_id="appr-1", name="Abu Ansari")}
+        self.on_call = {APPROVER_EMAIL: "Abu Ansari"}  # members of the on-call group
 
     def _record(self, name, *args):
         if self.down or name in self.fail:
@@ -97,6 +98,14 @@ class FakeServiceNow:
 
     def cancel_change(self, change, notes):
         self._record("cancel_change", change.number, notes)
+
+    def group_member(self, email, group):
+        self._record("group_member", email, group)
+        return self.on_call.get(email)
+
+    def find_change(self, number):
+        self._record("find_change", number)
+        return ref("change_request", number)
 
     def start_implementation(self, change, note):
         self._record("start_implementation", change.number, note)
@@ -191,35 +200,20 @@ def incident(client):
     return client.get("/incidents/1").json()
 
 
-# --- opening: the incident record and the emergency change ---
+# --- opening: the incident record and the AI diagnosis ---
 
 
-def test_rollback_opens_incident_raises_change_and_asks_the_cab(tmp_path):
+@pytest.mark.parametrize("recommendation", ["rollback", "investigate", "no_action"])
+def test_incident_gets_a_record_and_a_diagnosis_note_but_no_change(tmp_path, recommendation):
+    # A rollback raises no change: it backs out the change the release was deployed under.
     snow, chat = FakeServiceNow(), FakeChat()
-    client = orchestrator(tmp_path, snow, chat=chat)
-    client.post("/alerts", json=alert("firing"))
-    assert snow.names() == [
-        "open_incident",
-        "add_note",  # the AI diagnosis
-        "create_emergency_change",
-        "link_change",
-        "request_approval",
-    ]
-    inc = incident(client)
-    assert inc["itsm_incident"]["number"] == "INC0010002"
-    assert inc["change"]["number"] == "CHG0030005"
-    assert snow.calls[0][1].urgent  # critical alert -> urgent incident
-    shown = json.dumps(chat.posts[0])
-    assert "INC0010002" in shown and "CHG0030005" in shown and "CAB approval" in shown
-
-
-@pytest.mark.parametrize("recommendation", ["investigate", "no_action"])
-def test_no_change_unless_the_ai_recommends_rollback(tmp_path, recommendation):
-    snow = FakeServiceNow()
-    client = orchestrator(tmp_path, snow, recommendation)
+    client = orchestrator(tmp_path, snow, recommendation, chat=chat)
     client.post("/alerts", json=alert("firing"))
     assert snow.names() == ["open_incident", "add_note"]
-    assert incident(client)["change"] is None
+    inc = incident(client)
+    assert inc["itsm_incident"]["number"] == "INC0010002" and inc["change"] is None
+    assert snow.calls[0][1].urgent  # critical alert -> urgent incident
+    assert "INC0010002" in json.dumps(chat.posts[0])
 
 
 def test_servicenow_down_never_breaks_the_incident(tmp_path):
@@ -239,13 +233,37 @@ def test_no_servicenow_configured_means_no_records(tmp_path):
     assert incident(client)["itsm_incident"] is None and incident(client)["change"] is None
 
 
-# --- deciding: only a CAB approver ServiceNow is waiting on may decide ---
+def test_without_a_deploy_tool_a_rollback_click_is_simulated_for_anyone(tmp_path):
+    snow = FakeServiceNow()
+    client = orchestrator(tmp_path, snow)
+    client.post("/alerts", json=alert("firing"))
+    assert click(client, email=None) is None
+    decision = incident(client)["decision"]
+    assert decision["action"] == "approved" and "Simulated" in decision["outcome"]
+    assert "group_member" not in snow.names() and "pending_approver" not in snow.names()
+
+
+# --- deciding on a change that needs approval: only a person ServiceNow asked may decide ---
+# (Changes that need approval come with deploying a fix; here one is attached directly.)
+
+
+def with_change(client):
+    store = client.app.state.service.store
+    inc = store.get(1)
+    inc.change = ref("change_request", "CHG0030005")
+    store.save(inc)
+
+
+def raise_and_attach(tmp_path, snow):
+    client = orchestrator(tmp_path, snow)
+    client.post("/alerts", json=alert("firing"))
+    with_change(client)
+    return client
 
 
 def test_cab_approver_click_is_recorded_in_servicenow_under_their_name(tmp_path):
     snow = FakeServiceNow()
-    client = orchestrator(tmp_path, snow)
-    client.post("/alerts", json=alert("firing"))
+    client = raise_and_attach(tmp_path, snow)
     assert click(client) is None
     assert ("pending_approver", "CHG0030005", APPROVER_EMAIL) in snow.calls
     assert ("record_approval", "Abu Ansari", True, "Approved in Slack by abu, via Sentinel.") in (
@@ -254,15 +272,13 @@ def test_cab_approver_click_is_recorded_in_servicenow_under_their_name(tmp_path)
     decision = incident(client)["decision"]
     assert decision["action"] == "approved"
     assert "CAB approver Abu Ansari" in decision["outcome"] and "CHG0030005" in decision["outcome"]
-    assert "Simulated" in decision["outcome"]  # no deploy tool yet
     assert "cancel_change" not in snow.names()
     assert snow.calls[-1][0] == "add_note" and "Abu Ansari" in snow.calls[-1][2]
 
 
 def test_someone_servicenow_did_not_ask_cannot_decide(tmp_path):
     snow = FakeServiceNow()
-    client = orchestrator(tmp_path, snow)
-    client.post("/alerts", json=alert("firing"))
+    client = raise_and_attach(tmp_path, snow)
     note = click(client, email="someone.else@example.com")
     assert "not an approver for CHG0030005" in note
     assert incident(client)["decision"] is None
@@ -272,8 +288,7 @@ def test_someone_servicenow_did_not_ask_cannot_decide(tmp_path):
 
 def test_reject_by_cab_approver_cancels_the_change(tmp_path):
     snow = FakeServiceNow()
-    client = orchestrator(tmp_path, snow)
-    client.post("/alerts", json=alert("firing"))
+    client = raise_and_attach(tmp_path, snow)
     assert click(client, REJECT_ACTION) is None
     assert ("record_approval", "Abu Ansari", False, "Rejected in Slack by abu, via Sentinel.") in (
         snow.calls
@@ -283,17 +298,14 @@ def test_reject_by_cab_approver_cancels_the_change(tmp_path):
 
 
 def test_click_without_an_email_is_refused(tmp_path):
-    client = orchestrator(tmp_path, FakeServiceNow())
-    client.post("/alerts", json=alert("firing"))
+    client = raise_and_attach(tmp_path, FakeServiceNow())
     assert "couldn't read your email" in click(client, email=None)
     assert incident(client)["decision"] is None
 
 
 @pytest.mark.parametrize("failing", ["pending_approver", "record_approval"])
 def test_servicenow_trouble_while_deciding_records_nothing(tmp_path, failing):
-    snow = FakeServiceNow(fail=[failing])
-    client = orchestrator(tmp_path, snow)
-    client.post("/alerts", json=alert("firing"))
+    client = raise_and_attach(tmp_path, FakeServiceNow(fail=[failing]))
     note = click(client)
     assert "Nothing was recorded" in note and "try again" in note
     assert incident(client)["decision"] is None
@@ -301,21 +313,11 @@ def test_servicenow_trouble_while_deciding_records_nothing(tmp_path, failing):
 
 def test_second_click_does_not_touch_servicenow_again(tmp_path):
     snow = FakeServiceNow()
-    client = orchestrator(tmp_path, snow)
-    client.post("/alerts", json=alert("firing"))
+    client = raise_and_attach(tmp_path, snow)
     click(client)
     before = len(snow.calls)
     assert "already decided" in click(client, REJECT_ACTION)
     assert len(snow.calls) == before
-
-
-def test_without_a_change_anyone_can_decide_as_before(tmp_path):
-    snow = FakeServiceNow(fail=["create_emergency_change"])
-    client = orchestrator(tmp_path, snow)
-    client.post("/alerts", json=alert("firing"))
-    assert click(client, email=None) is None
-    assert incident(client)["decision"]["action"] == "approved"
-    assert "pending_approver" not in snow.names()
 
 
 # --- resolving ---
@@ -323,8 +325,7 @@ def test_without_a_change_anyone_can_decide_as_before(tmp_path):
 
 def test_resolve_closes_incident_and_cancels_an_undecided_change(tmp_path):
     snow = FakeServiceNow()
-    client = orchestrator(tmp_path, snow)
-    client.post("/alerts", json=alert("firing"))
+    client = raise_and_attach(tmp_path, snow)
     client.post("/alerts", json=alert("resolved"))
     cancel = next(c for c in snow.calls if c[0] == "cancel_change")
     assert "before anyone approved" in cancel[2]
@@ -334,8 +335,7 @@ def test_resolve_closes_incident_and_cancels_an_undecided_change(tmp_path):
 
 def test_resolve_after_approval_keeps_the_change(tmp_path):
     snow = FakeServiceNow()
-    client = orchestrator(tmp_path, snow)
-    client.post("/alerts", json=alert("firing"))
+    client = raise_and_attach(tmp_path, snow)
     click(client)
     client.post("/alerts", json=alert("resolved"))
     assert "cancel_change" not in snow.names()
@@ -583,3 +583,30 @@ def test_servicenow_settings_from_environment_and_password_hidden(monkeypatch):
     assert "s3cret-pw" not in repr(settings) and "s3cret-pw" not in settings.model_dump_json()
     monkeypatch.delenv("SERVICENOW_PASSWORD")
     assert not load_settings().servicenow_ready()
+
+
+def test_group_member_names_the_person_only_if_they_are_in_the_group():
+    def handler(request):
+        if request.url.path.endswith("/sys_user"):
+            return ok([{"sys_id": "u1", "name": "Abu Ansari"}])
+        member = "group.name=ShopLite On-Call" in request.url.params["sysparm_query"]
+        return ok([{"sys_id": "m1"}] if member else [])
+
+    snow, seen = servicenow(handler)
+    assert snow.group_member("abu@example.com", "ShopLite On-Call") == "Abu Ansari"
+    assert seen[1].url.params["sysparm_query"] == "user=u1^group.name=ShopLite On-Call"
+    assert snow.group_member("abu@example.com", "CAB Approval") is None
+
+
+def test_group_name_cannot_inject_into_queries():
+    snow, seen = servicenow(lambda r: ok([{"sys_id": "u1", "name": "A"}]))
+    assert snow.group_member("abu@example.com", "x^ORactive=true") is None
+    assert len(seen) == 1  # the user lookup only; the group query never ran
+
+
+def test_find_change_takes_the_newest_record_with_that_number():
+    snow, seen = servicenow(lambda r: ok([{"sys_id": "c9", "number": "CHG0031001"}]))
+    found = snow.find_change("CHG0031001")
+    assert found.sys_id == "c9" and found.table == "change_request"
+    assert "ORDERBYDESCsys_created_on" in seen[0].url.params["sysparm_query"]
+    assert snow.find_change("CHG1^ORactive=true") is None and len(seen) == 1

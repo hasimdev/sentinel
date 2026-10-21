@@ -15,6 +15,7 @@ from orchestrator.adapters.base import AdapterError
 
 RunStatus = Literal["running", "succeeded", "failed"]
 VERSION = re.compile(r"^\d+\.\d+\.\d+$")
+CHANGE = re.compile(r"^CHG\d{7}$")  # a ServiceNow change number
 
 # Harness execution statuses that mean "finished". Anything else is still going.
 SUCCEEDED = {"success", "ignorefailed"}
@@ -27,7 +28,7 @@ class DeployRun(BaseModel):
 
 
 class DeployControl(Protocol):
-    def start(self, version: str, reason: str) -> DeployRun: ...
+    def start(self, version: str, reason: str, change: str | None = None) -> DeployRun: ...
     def status(self, run: DeployRun) -> RunStatus: ...
 
 
@@ -59,15 +60,19 @@ class HarnessDeployControl:
             transport=transport,
         )
 
-    def start(self, version: str, reason: str) -> DeployRun:
+    def start(self, version: str, reason: str, change: str | None = None) -> DeployRun:
+        """Run the pipeline for `version`, under ServiceNow change `change` if given."""
         if not VERSION.fullmatch(version):
             raise AdapterError(f"Not a version: {version!r}")
+        if change is not None and not CHANGE.fullmatch(change):
+            raise AdapterError(f"Not a change number: {change!r}")
         inputs = {
             "pipeline": {
                 "identifier": self.pipeline,
                 "variables": [
                     {"name": "version", "type": "String", "value": version},
                     {"name": "reason", "type": "String", "value": reason[:200]},
+                    {"name": "change", "type": "String", "value": change or "none"},
                 ],
             }
         }

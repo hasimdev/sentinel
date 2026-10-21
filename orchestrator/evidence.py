@@ -37,6 +37,19 @@ def metric_queries(incident: Incident) -> dict[str, str]:
     }
 
 
+def recent_error_rate_query(service: str | None, env: str | None, version: str) -> str | None:
+    """PromQL for one version's error rate over the last minute (for checking a rollback).
+
+    None if the service name isn't a usable metric prefix.
+    """
+    if not service or not _METRIC_NAME_OK.match(service):
+        return None
+    sel = label_selector(service=service, env=env, version=version)
+    requests = f"{service}_http_requests_total"
+    errors = f'sum(rate({requests}{{{sel}, status=~"5.."}}[1m]))'
+    return f"({errors} or vector(0)) / sum(rate({requests}{{{sel}}}[1m]))"
+
+
 def error_log_query(incident: Incident) -> str:
     return "{" + _selector(incident, level="ERROR") + "}"
 

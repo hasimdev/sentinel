@@ -25,6 +25,8 @@ INCIDENT_RESOLVED = "6"
 RESOLVE_CODE = "Workaround provided"
 
 _EMAIL = re.compile(r"^[^\s@^,=]+@[^\s@^,=]+$")  # no ServiceNow query characters
+_NAME = re.compile(r"^[A-Za-z0-9 ._-]{1,80}$")  # a group name, safe inside a query
+_CHANGE = re.compile(r"^CHG\d{7}$")
 
 
 class NewIncident(BaseModel):
@@ -57,6 +59,8 @@ class ChangeMgmt(Protocol):
     def link_change(self, incident: RecordRef, change: RecordRef) -> None: ...
     def request_approval(self, change: RecordRef) -> None: ...
     def pending_approver(self, change: RecordRef, email: str) -> Approver | None: ...
+    def group_member(self, email: str, group: str) -> str | None: ...
+    def find_change(self, number: str) -> RecordRef | None: ...
     def record_approval(self, approver: Approver, approved: bool, comment: str) -> None: ...
     def cancel_change(self, change: RecordRef, notes: str) -> None: ...
     def start_implementation(self, change: RecordRef, note: str) -> None: ...
@@ -129,18 +133,42 @@ class ServiceNowChangeMgmt:
         body = {"assignment_group": self._change_group_id(), "state": CHANGE_AUTHORIZE}
         self._call("PATCH", f"/api/sn_chg_rest/change/{change.sys_id}", json=body)
 
+    def group_member(self, email: str, group: str) -> str | None:
+        """The name of the person with this email, if they belong to ServiceNow group `group`."""
+        user = self._user(email)
+        if user is None or not _NAME.match(group):
+            return None
+        members = self._call(
+            "GET",
+            "/api/now/table/sys_user_grmember",
+            params={
+                "sysparm_query": f"user={user['sys_id']}^group.name={group}",
+                "sysparm_fields": "sys_id",
+                "sysparm_limit": "1",
+            },
+        )
+        return user["name"] if members else None
+
+    def find_change(self, number: str) -> RecordRef | None:
+        """A change by number (the newest one, if old demo data reuses the number)."""
+        if not _CHANGE.match(number):
+            return None
+        found = self._call(
+            "GET",
+            "/api/now/table/change_request",
+            params={
+                "sysparm_query": f"number={number}^ORDERBYDESCsys_created_on",
+                "sysparm_fields": "sys_id,number",
+                "sysparm_limit": "1",
+            },
+        )
+        return self._ref("change_request", found[0]) if found else None
+
     def pending_approver(self, change: RecordRef, email: str) -> Approver | None:
         """The person with this email, if ServiceNow is waiting on their approval of `change`."""
-        if not _EMAIL.match(email):
+        user = self._user(email)
+        if user is None:
             return None
-        users = self._call(
-            "GET",
-            "/api/now/table/sys_user",
-            params={"sysparm_query": f"email={email}^active=true", "sysparm_fields": "sys_id,name"},
-        )
-        if len(users) != 1:  # no match, or ambiguous: don't guess who clicked
-            return None
-        user = users[0]
         waiting = f"sysapproval={change.sys_id}^approver={user['sys_id']}^state=requested"
         requests = self._call(
             "GET",
@@ -179,6 +207,17 @@ class ServiceNowChangeMgmt:
         self._call("PATCH", path, json=body)
 
     # --- helpers ---
+
+    def _user(self, email: str) -> dict | None:
+        """The one active ServiceNow user with this email; None if none or several."""
+        if not _EMAIL.match(email):
+            return None
+        users = self._call(
+            "GET",
+            "/api/now/table/sys_user",
+            params={"sysparm_query": f"email={email}^active=true", "sysparm_fields": "sys_id,name"},
+        )
+        return users[0] if len(users) == 1 else None  # ambiguous: don't guess who clicked
 
     def _change_group_id(self) -> str:
         if self._group_id is None:

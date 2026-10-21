@@ -70,7 +70,7 @@ release:
 	$(PY) -m deploy.shoplite release $(VERSION)
 
 deploy:
-	$(PY) -m deploy.shoplite deploy $(VERSION)
+	$(PY) -m deploy.shoplite deploy $(VERSION) $(if $(CHANGE),--change $(CHANGE))
 
 shoplite-status:
 	$(PY) -m deploy.shoplite status

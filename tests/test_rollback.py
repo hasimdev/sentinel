@@ -1,4 +1,6 @@
-"""Real rollbacks through Harness after a CAB approval. Harness and ServiceNow are faked."""
+"""Real rollbacks through Harness. A rollback needs no new ticket: it backs out the change the
+release was deployed under. Someone on call approves it, then Sentinel checks the error rate is
+back to normal. Harness, ServiceNow and the metrics are faked."""
 
 import json
 
@@ -19,7 +21,7 @@ from test_change_mgmt import (
 
 from orchestrator.adapters.base import AdapterError
 from orchestrator.adapters.deploy_control import DeployRun, HarnessDeployControl
-from orchestrator.deploy_history import rollback_target
+from orchestrator.deploy_history import release_of, rollback_target
 from orchestrator.main import create_app
 from orchestrator.messages import REJECT_ACTION, incident_message
 from orchestrator.models import RollbackRun
@@ -31,12 +33,12 @@ class FakeHarness:
 
     def __init__(self, statuses=("running", "succeeded"), fail_start=False, fail_polls=0):
         self.statuses, self.fail_start, self.fail_polls = list(statuses), fail_start, fail_polls
-        self.started: list[tuple[str, str]] = []
+        self.started: list[tuple[str, str, str | None]] = []
 
-    def start(self, version, reason):
+    def start(self, version, reason, change=None):
         if self.fail_start:
             raise AdapterError("Harness refused (401): invalid API key")
-        self.started.append((version, reason))
+        self.started.append((version, reason, change))
         return DeployRun(run_id="exec1", url="https://harness.example/exec1")
 
     def status(self, run):
@@ -46,28 +48,52 @@ class FakeHarness:
         return self.statuses.pop(0) if len(self.statuses) > 1 else self.statuses[0]
 
 
+class ErrorRates(NoMetrics):
+    """Answers the validation query with the scripted error rates in turn (the last repeats)."""
+
+    def __init__(self, *rates):
+        self.rates = list(rates) or [0.0]
+
+    def instant(self, q):
+        if "1m" not in q:  # evidence queries use 5m windows
+            return None
+        rate = self.rates.pop(0) if len(self.rates) > 1 else self.rates[0]
+        if isinstance(rate, Exception):
+            raise rate
+        return rate
+
+
 def write_history(path, *events):
     path.write_text("\n".join(json.dumps(e) for e in events) + "\n", encoding="utf-8")
 
 
-def deploy_event(version, previous):
-    return {"service": "shoplite", "version": version, "previous_version": previous}
+def deploy_event(version, previous, change=None):
+    return {
+        "service": "shoplite",
+        "version": version,
+        "previous_version": previous,
+        "change": change,
+    }
 
 
 @pytest.fixture
 def history(tmp_path):
     path = tmp_path / "deploys.log"
-    write_history(path, deploy_event("0.1.0", None), deploy_event("0.2.0", "0.1.0"))
+    write_history(
+        path,
+        deploy_event("0.1.0", None, "CHG0031000"),
+        deploy_event("0.2.0", "0.1.0", "CHG0031001"),
+    )
     return path
 
 
-def orchestrator(tmp_path, harness, history, snow=None, chat=None, timeout_s=5.0):
+def orchestrator(tmp_path, harness, history, snow=None, chat=None, metrics=None, timeout_s=5.0):
     settings = Settings(
         db_path=str(tmp_path / "db.sqlite"), triage_enabled=False, deploy_log_path=str(history)
     )
     app = create_app(
         settings,
-        NoMetrics(),
+        metrics or ErrorRates(0.0),
         NoLogs(),
         triage_agent=Agent("rollback"),
         chat=chat or FakeChat(),
@@ -78,40 +104,96 @@ def orchestrator(tmp_path, harness, history, snow=None, chat=None, timeout_s=5.0
     service._background = lambda job: job()  # run the rollback right away, in the test
     service.rollback_poll_s = 0
     service.rollback_timeout_s = timeout_s
+    service.validate_poll_s = 0
+    service.validate_for_s = 0  # "stays healthy" = the first healthy reading, in tests
+    service.validate_timeout_s = 1
     return TestClient(app)
 
 
-def approve(client, action=None):
+def approve(client, action=None, email=None):
     client.post("/alerts", json=alert("firing"))
-    note = click(client, action) if action else click(client)
+    kwargs = {"email": email} if email is not None else {}
+    note = click(client, action, **kwargs) if action else click(client, **kwargs)
     return note, client.get("/incidents/1").json()
 
 
 # --- the flow ---
 
 
-def test_approved_rollback_runs_in_harness_and_closes_the_change(tmp_path, history):
+def test_on_call_approval_backs_out_the_release_change_with_no_new_ticket(tmp_path, history):
     harness, snow, chat = FakeHarness(), FakeServiceNow(), FakeChat()
     note, incident = approve(orchestrator(tmp_path, harness, history, snow, chat))
     assert note is None
-    assert harness.started == [("0.1.0", "CHG0030005 approved for Sentinel incident #1")]
-    assert "Harness is rolling back now" in incident["decision"]["outcome"]
-    assert incident["rollback"]["status"] == "succeeded"
-    assert incident["rollback"]["target_version"] == "0.1.0"
-    names = snow.names()
-    assert names.index("start_implementation") < names.index("close_change")
-    close = next(c for c in snow.calls if c[0] == "close_change")
-    assert close[2] is True and "https://harness.example/exec1" in close[3] and "abu" in close[3]
-    assert "watch the run" in chat.replies[0] and "Rollback done" in chat.replies[-1]
-    assert "Rolled back to 0.1.0" in json.dumps(chat.updates[-1])
+    assert ("group_member", "cab.member@example.com", "ShopLite On-Call") in snow.calls
+    assert harness.started == [
+        ("0.1.0", "Backout of CHG0031001 for Sentinel incident #1", "CHG0031001")
+    ]
+    outcome = incident["decision"]["outcome"]
+    assert "on call: Abu Ansari" in outcome and "No new change needed" in outcome
+    rollback = incident["rollback"]
+    assert rollback["status"] == "succeeded" and rollback["release_change"] == "CHG0031001"
+    assert rollback["validation"] == "validated"
+    # no change is raised, approved or closed: the release change gets a backout note
+    for name in ("create_emergency_change", "request_approval", "record_approval", "close_change"):
+        assert name not in snow.names()
+    notes = [c for c in snow.calls if c[0] == "add_note"]
+    assert any(c[1] == "CHG0031001" and "Backed out by Sentinel incident #1" in c[2] for c in notes)
+    assert any(c[1] == "INC0010002" and "Rollback validated" in c[2] for c in notes)
+    assert "backing out CHG0031001" in chat.replies[0]
+    assert "Rollback validated" in chat.replies[-1]
+    shown = json.dumps(chat.updates[-1])
+    assert "backout of CHG0031001" in shown and "Rollback validated" in shown
 
 
-def test_failed_harness_run_closes_the_change_as_unsuccessful(tmp_path, history):
+def test_someone_not_on_call_cannot_approve_a_rollback(tmp_path, history):
+    harness, snow = FakeHarness(), FakeServiceNow()
+    client = orchestrator(tmp_path, harness, history, snow)
+    note, incident = approve(client, email="someone.else@example.com")
+    assert "not in ShopLite On-Call" in note
+    assert incident["decision"] is None and harness.started == []
+    assert click(client) is None  # someone on call still can
+
+
+def test_rollback_click_without_an_email_is_refused(tmp_path, history):
+    harness = FakeHarness()
+    client = orchestrator(tmp_path, harness, history)
+    client.post("/alerts", json=alert("firing"))
+    assert "couldn't read your email" in click(client, email=None)
+    assert harness.started == []
+
+
+def test_release_deployed_without_a_change_is_still_backed_out(tmp_path):
+    path = tmp_path / "d.log"
+    write_history(path, deploy_event("0.1.0", None), deploy_event("0.2.0", "0.1.0"))
+    harness, snow = FakeHarness(), FakeServiceNow()
+    _, incident = approve(orchestrator(tmp_path, harness, path, snow))
+    assert harness.started == [("0.1.0", "Backout of release 0.2.0 for Sentinel incident #1", None)]
+    assert "find_change" not in snow.names() and incident["rollback"]["release_change"] is None
+
+
+def test_errors_that_do_not_settle_mean_not_validated(tmp_path, history):
+    chat = FakeChat()
+    client = orchestrator(tmp_path, FakeHarness(), history, chat=chat, metrics=ErrorRates(0.30))
+    _, incident = approve(client)
+    assert incident["rollback"]["validation"] == "not_validated"
+    assert (
+        "Rollback not validated" in chat.replies[-1] and "A person should check" in chat.replies[-1]
+    )
+
+
+def test_validation_waits_for_errors_to_settle(tmp_path, history):
+    metrics = ErrorRates(0.30, None, AdapterError("Prometheus down"), 0.01)
+    _, incident = approve(orchestrator(tmp_path, FakeHarness(), history, metrics=metrics))
+    assert incident["rollback"]["validation"] == "validated"
+
+
+def test_failed_harness_run_is_reported_and_not_validated(tmp_path, history):
     harness, snow, chat = FakeHarness(statuses=("running", "failed")), FakeServiceNow(), FakeChat()
     _, incident = approve(orchestrator(tmp_path, harness, history, snow, chat))
     assert incident["rollback"]["status"] == "failed"
-    close = next(c for c in snow.calls if c[0] == "close_change")
-    assert close[2] is False and "A person needs to take over" in close[3]
+    assert incident["rollback"]["validation"] is None
+    note = next(c for c in snow.calls if c[0] == "add_note" and c[1] == "CHG0031001")
+    assert "failed in Harness" in note[2] and "A person needs to take over" in note[2]
     assert "Rollback to 0.1.0 failed" in chat.replies[-1]
 
 
@@ -119,17 +201,16 @@ def test_harness_refusing_to_start_is_reported_and_nothing_is_recorded_as_run(tm
     snow, chat = FakeServiceNow(), FakeChat()
     _, incident = approve(orchestrator(tmp_path, FakeHarness(fail_start=True), history, snow, chat))
     assert incident["rollback"] is None
-    close = next(c for c in snow.calls if c[0] == "close_change")
-    assert close[2] is False and "invalid API key" in close[3]
-    assert "Nothing was rolled back" in chat.replies[-1]
+    assert "Nothing was rolled back" in chat.replies[-1] and "invalid API key" in chat.replies[-1]
+    note = next(c for c in snow.calls if c[0] == "add_note" and "Not rolled back" in c[2])
+    assert note[1] == "INC0010002"
 
 
-def test_unknown_previous_version_cancels_the_change_without_deploying(tmp_path):
+def test_unknown_previous_version_deploys_nothing(tmp_path):
     empty = tmp_path / "none.log"
-    harness, snow, chat = FakeHarness(), FakeServiceNow(), FakeChat()
-    _, incident = approve(orchestrator(tmp_path, harness, empty, snow, chat))
+    harness, chat = FakeHarness(), FakeChat()
+    _, incident = approve(orchestrator(tmp_path, harness, empty, chat=chat))
     assert harness.started == [] and incident["rollback"] is None
-    assert "start_implementation" not in snow.names() and "cancel_change" in snow.names()
     assert "doesn't show which version ran before 0.2.0" in chat.replies[-1]
 
 
@@ -152,14 +233,6 @@ def test_rejection_never_deploys(tmp_path, history):
     assert harness.started == [] and incident["rollback"] is None
 
 
-def test_non_approver_click_never_deploys(tmp_path, history):
-    harness = FakeHarness()
-    client = orchestrator(tmp_path, harness, history)
-    client.post("/alerts", json=alert("firing"))
-    assert "not an approver" in click(client, email="someone.else@example.com")
-    assert harness.started == []
-
-
 def test_without_servicenow_rollbacks_stay_simulated(tmp_path, history):
     harness = FakeHarness()
     settings = Settings(db_path=str(tmp_path / "db.sqlite"), triage_enabled=False)
@@ -167,7 +240,7 @@ def test_without_servicenow_rollbacks_stay_simulated(tmp_path, history):
         settings, NoMetrics(), NoLogs(), triage_agent=Agent("rollback"), deploy_control=harness
     )
     client = TestClient(app)
-    assert app.state.service.deploy_control is None  # no approved change, no real rollback
+    assert app.state.service.deploy_control is None  # no ServiceNow, no real rollback
     client.post("/alerts", json=alert("firing"))
     click(client, email=None)
     incident = client.get("/incidents/1").json()
@@ -205,6 +278,18 @@ def test_no_target_when_history_is_missing_or_unhelpful(tmp_path):
     assert rollback_target(path, "shoplite", None) is None
     write_history(path, {"service": "other", "version": "0.2.0", "previous_version": "0.1.0"})
     assert rollback_target(path, "shoplite", "0.2.0") is None  # another service
+
+
+def test_release_of_reads_the_change_it_was_deployed_under(tmp_path):
+    path = tmp_path / "d.log"
+    write_history(
+        path,
+        deploy_event("0.1.0", None, "CHG0031000"),
+        deploy_event("0.2.0", "0.1.0", "CHG0031001"),
+    )
+    release = release_of(path, "shoplite", "0.2.0")
+    assert (release.previous_version, release.change) == ("0.1.0", "CHG0031001")
+    assert release_of(path, "shoplite", "9.9.9") is None
 
 
 # --- the Slack message ---
@@ -318,3 +403,18 @@ def test_harness_settings_from_environment_and_key_hidden(monkeypatch):
     assert "sat.s3cret" not in repr(settings) and "sat.s3cret" not in settings.model_dump_json()
     monkeypatch.delenv("HARNESS_API_KEY")
     assert not load_settings().harness_ready()
+
+
+def test_start_passes_the_change_number_and_refuses_a_malformed_one():
+    adapter, seen = harness(
+        lambda r: httpx2.Response(200, json={"data": {"planExecution": {"uuid": "ex9"}}})
+    )
+    adapter.start("0.1.0", "Backout of CHG0031001", change="CHG0031001")
+    variables = json.loads(seen[0].content)["pipeline"]["variables"]
+    assert {"name": "change", "type": "String", "value": "CHG0031001"} in variables
+    adapter.start("0.1.0", "manual")
+    variables = json.loads(seen[1].content)["pipeline"]["variables"]
+    assert {"name": "change", "type": "String", "value": "none"} in variables
+    with pytest.raises(AdapterError, match="Not a change number"):
+        adapter.start("0.1.0", "x", change="CHG1; rm -rf /")
+    assert len(seen) == 2

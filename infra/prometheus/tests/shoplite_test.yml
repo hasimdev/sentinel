@@ -48,3 +48,30 @@ tests:
       - eval_time: 4m
         alertname: ShopLiteHighErrorRate
         exp_alerts: []
+
+  # 10% of requests fail -> the warning alert fires after 2 minutes; the critical one does not.
+  - interval: 15s
+    input_series:
+      - series: 'shoplite_http_requests_total{service="shoplite",env="local",version="0.2.0",commit_sha="e8f12b0",method="POST",route="/checkout",status="200"}'
+        values: "0+90x20"
+      - series: 'shoplite_http_requests_total{service="shoplite",env="local",version="0.2.0",commit_sha="e8f12b0",method="POST",route="/checkout",status="500"}'
+        values: "0+10x20"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: ShopLiteElevatedErrorRate
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: ShopLiteElevatedErrorRate
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: shoplite
+              env: local
+              version: "0.2.0"
+              commit_sha: e8f12b0
+            exp_annotations:
+              summary: "ShopLite error rate is elevated: 10% on version 0.2.0 (e8f12b0)"
+              dashboard: "http://localhost:3000/d/shoplite"
+      - eval_time: 4m
+        alertname: ShopLiteHighErrorRate
+        exp_alerts: []

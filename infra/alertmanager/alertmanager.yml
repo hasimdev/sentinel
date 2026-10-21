@@ -15,3 +15,9 @@ receivers:
         send_resolved: true
       - url: http://alert-inbox:8080/alerts
         send_resolved: true
+
+# A critical alert for the same release silences its warning-level twin.
+inhibit_rules:
+  - source_matchers: [severity="critical"]
+    target_matchers: [severity="warning"]
+    equal: [service, env, version, commit_sha]

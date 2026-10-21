@@ -19,6 +19,11 @@ pipeline:
       description: Why, e.g. the approved change request
       required: false
       value: <+input>.default(manual run)
+    - name: change
+      type: String
+      description: ServiceNow change it runs under (a rollback names the release change it backs out)
+      required: false
+      value: <+input>.default(none)
   stages:
     - stage:
         name: Deploy ShopLite
@@ -46,13 +51,19 @@ pipeline:
                           if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
                             echo "Not a version: $VERSION"; exit 1
                           fi
-                          printf 'Deploying ShopLite %s. Reason: %s\n' "$VERSION" "$REASON"
+                          if [ "$CHANGE" = "none" ]; then CHANGE=""; fi
+                          if [[ -n "$CHANGE" && ! "$CHANGE" =~ ^CHG[0-9]{7}$ ]]; then
+                            echo "Not a change number: $CHANGE"; exit 1
+                          fi
+                          printf 'Deploying ShopLite %s under change %s. Reason: %s\n' \
+                            "$VERSION" "${CHANGE:-none}" "$REASON"
                           docker run --rm \
                             -v /var/run/docker.sock:/var/run/docker.sock \
                             -v "$SENTINEL_LOGS_DIR":/app/logs \
                             -e SHOPLITE_LOGS_SOURCE="$SENTINEL_LOGS_DIR" \
                             -e SHOPLITE_HEALTH_URL=http://host.docker.internal:8000/health \
                             -e DEPLOYED_BY="harness:$RUN_ID" \
+                            -e CHANGE_NUMBER="$CHANGE" \
                             sentinel/deployer:local deploy "$VERSION"
                     environmentVariables:
                       - name: VERSION
@@ -61,6 +72,9 @@ pipeline:
                       - name: REASON
                         type: String
                         value: <+pipeline.variables.reason>
+                      - name: CHANGE
+                        type: String
+                        value: <+pipeline.variables.change>
                       - name: RUN_ID
                         type: String
                         value: <+pipeline.executionId>

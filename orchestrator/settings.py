@@ -26,6 +26,7 @@ ENV_VARS = {
     "SERVICENOW_USERNAME": "servicenow_username",
     "SERVICENOW_PASSWORD": "servicenow_password",
     "SERVICENOW_CHANGE_GROUP": "servicenow_change_group",
+    "SERVICENOW_ONCALL_GROUP": "servicenow_oncall_group",
     "HARNESS_ACCOUNT_ID": "harness_account_id",
     "HARNESS_API_KEY": "harness_api_key",
     "HARNESS_ORG": "harness_org",
@@ -66,6 +67,8 @@ class Settings(BaseModel):
     servicenow_password: SecretStr | None = None
     # The group a change is assigned to before it goes to the CAB for approval.
     servicenow_change_group: str = "Change Management"
+    # Who may approve a rollback (no new ticket): members of this ServiceNow group.
+    servicenow_oncall_group: str = "ShopLite On-Call"
 
     # Harness: account ID + API key = real rollbacks after a CAB approval (needs ServiceNow too).
     harness_account_id: str | None = None
