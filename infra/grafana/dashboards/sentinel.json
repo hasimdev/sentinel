@@ -494,7 +494,7 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "**How Sentinel works:** the AI investigates with read-only tools and *recommends*. A CAB approver *decides* in Slack (checked by ServiceNow). Harness *executes* the rollback. Every step is recorded in ServiceNow, Slack and Jira.  \nNumbers are worked out from every incident Sentinel has recorded (medians, all time)."
+        "content": "**How Sentinel works:** the AI investigates with read-only tools and *recommends*. Someone *on call* approves a rollback (no new ticket: it backs out the release's change); a fix goes out under the change its priority calls for (P1/P2 emergency, ECAB after; P3/P4 normal, CAB first). Harness *executes*; ServiceNow, Slack and Jira record every step.  \nNumbers are worked out from every incident Sentinel has recorded (medians, all time)."
       }
     }
   ]
