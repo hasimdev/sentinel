@@ -43,7 +43,16 @@ Deferred: web dashboard.
 | B. Jira follow-up tickets | Done |
 | C. ServiceNow incident, emergency change, CAB approval from Slack | Done |
 | D. Harness deploy and real rollback after Slack approval | Done |
-| E. Measure the approval step (Grafana), full demo (docs/demo.md), Part 2 post | In progress |
+| E. Measure the approval step (Grafana), full demo (docs/demo.md), Part 2 post | Done |
+
+### Part 3: the real change process
+
+| Step | Status |
+|---|---|
+| Rollback with no new ticket: backout of the release change, on-call approval, validation | Built |
+| Fixes by priority: P1/P2 emergency change (ECAB afterwards), P3/P4 normal change (CAB first) | Built |
+| Releases under a normal change; warning alert for P3/P4 | Built |
+| Live demo of every path, then the Part 2 post | Next |
 
 ## Monitoring locally
 

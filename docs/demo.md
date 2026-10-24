@@ -1,51 +1,76 @@
-# Sentinel demo: bad release to real rollback in about 5 minutes
+# Sentinel demo: a real change process, end to end
 
-The full loop: a bad release breaks checkout, the AI investigates and recommends a rollback,
-ServiceNow asks the CAB, a CAB approver approves in Slack, Harness rolls back, every record
-closes itself. Costs one AI diagnosis (about $0.10).
+A bad release breaks checkout. The AI investigates and recommends a rollback; someone on call
+approves it, and it runs with no new ticket (it backs out the release's change). Then an
+engineer ships a fix, and it goes out under the change its priority calls for. Every record
+updates itself. Costs one AI diagnosis per incident (about $0.10).
 
 ## Before you start (once)
 
 - Docker Desktop running. If it hangs: quit it, `wsl --shutdown`, start it again.
 - `.env` has the Anthropic, Slack, ServiceNow, Jira and Harness settings (see `.env.example`).
-- Release images exist: `make release VERSION=0.1.0` and `make release VERSION=0.2.0`.
-- The Harness pipeline exists (`make harness-pipeline`, see deploy/README.md).
-- Your Slack email belongs to a ServiceNow user in the **CAB Approval** group.
+- Release images exist: `make release VERSION=0.1.0`, `0.2.0` and `0.2.1`.
+- The Harness pipeline is current (`make harness-pipeline`, see deploy/README.md).
+- In ServiceNow, your Slack email belongs to a user in **ShopLite On-Call**, **Change
+  Management** and **CAB Approval**.
 
-## Run it
+## Start
 
 Three terminals:
 
 ```bash
 make infra-up && make harness-up    # 1: monitoring + the Harness delegate
-make deploy VERSION=0.1.0           #    the good release
 make run-orchestrator               # 2: Sentinel (Slack connects)
 make traffic                        # 3: steady shop traffic
 ```
 
-Wait about 30 s, then break it:
+Deploy the good release, then raise and approve the bad release's change:
 
 ```bash
-make deploy VERSION=0.2.0
+make deploy VERSION=0.1.0
+make release-change VERSION=0.2.0   # approve it in ServiceNow: Change Management, then CAB
+make deploy VERSION=0.2.0 CHANGE=CHG...
 ```
 
-## What happens, and what to screenshot
+## Path 1: rollback, no new ticket (P1)
 
-| # | When | What you see | Screenshot |
-|---|---|---|---|
-| 1 | ~1 min | Error rate jumps on 0.2.0; red alert line | **Grafana** ShopLite dashboard (`/d/shoplite`) |
-| 2 | ~1.5 min | Incident posted: AI cause, evidence, **Roll back**, ServiceNow INC + CHG links | **Slack** message |
-| 3 | same | Emergency change in *Authorize*, CAB approvers *Requested* | **ServiceNow** CHG, Approvers tab |
-| 4 | you | Click **Approve rollback** | Slack: "approved by … as CAB approver …" |
-| 5 | +2 s | Your approval recorded under your name; change *Implement* | **ServiceNow** approver row |
-| 6 | +20 s | Pipeline green; ShopLite back on 0.1.0 | **Harness** execution |
-| 7 | +20 s | "Rollback done", change **Closed / Successful** with the run link | Slack thread + ServiceNow CHG |
-| 8 | +1 min | Error rate back to 0; INC *Resolved*; Jira follow-up filed | Grafana, ServiceNow INC, **Jira** |
-| 9 | after | Agree rate, time to decide, rollback time, time to recover | **Grafana** "Sentinel – AI & approvals" (`/d/sentinel`) |
+| When | What you see | Screenshot |
+|---|---|---|
+| ~1 min | Errors jump on 0.2.0; critical alert | Grafana (`/d/shoplite`) |
+| ~1.5 min | Slack: AI cause, evidence, **Roll back**; ServiceNow INC | Slack message |
+| you | Click **Approve rollback** (on-call check by ServiceNow) | Slack |
+| +30 s | "Rolling back, backing out CHG..." then "Rollback done" | Harness run |
+| +2 min | "Rollback validated"; backout note on the release change | ServiceNow CHG notes |
 
-## Stop everything
+## Path 2: fix under an emergency change (P1/P2)
 
-Stop the three terminals (Ctrl+C), then:
+```bash
+make fix VERSION=0.2.1 INCIDENT=<the incident number>
+```
+
+| When | What you see | Screenshot |
+|---|---|---|
+| now | Slack: **Emergency change CHG...**, button **Deploy fix now** | Slack fix message |
+| you | Click **Deploy fix now** (on call) | |
+| +30 s | Harness deploys 0.2.1; validated; change sent to the ECAB | Harness run |
+| you | Click **Approve (ECAB review)** | |
+| now | Change **Closed**: "implemented as an emergency fix before review" | ServiceNow CHG |
+
+## Path 3: fix under a normal change (P3/P4)
+
+For a P3 the alert must be the milder warning one. Restart traffic with fewer checkouts
+(`make traffic CHECKOUT_SHARE=0.2`), deploy 0.2.0 again so errors sit around 10%, wait for the
+warning incident, then `make fix VERSION=0.2.1 INCIDENT=<n>`.
+
+| When | What you see |
+|---|---|
+| now | Slack: **Normal change CHG...**, **Approve change** |
+| you | Approve (Change Management): "Next: the CAB" |
+| you | Approve (CAB): deploys, validates, change **Closed / Successful** |
+
+## Finish
+
+Screenshot Grafana "Sentinel – AI & approvals" (`/d/sentinel`). Then stop everything:
 
 ```bash
 make shoplite-stop && make harness-down && make infra-down

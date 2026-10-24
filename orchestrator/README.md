@@ -52,46 +52,52 @@ the incident's Slack thread. Needs `JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_API_TOKE
 `JIRA_PROJECT_KEY` in `.env`; without them, tickets are off. Jira trouble never affects the
 incident (logged as `ticket failed`).
 
-## ServiceNow (incident record, emergency change, CAB approval)
+## ServiceNow and Harness: how changes flow
 
-Each new incident gets a ServiceNow **incident**; the AI's diagnosis is added as a work note.
-When the AI recommends a **rollback**, Sentinel raises an **emergency change**, links it to the
-incident, assigns it to the `Change Management` group and moves it to *Authorize*, so
-ServiceNow asks its CAB to approve it. The Slack message links both records.
+Sentinel follows a real change process. Each new incident gets a ServiceNow **incident**; the
+AI's diagnosis is added as a work note. Priority comes from the alert, never from the AI: a
+`critical` alert is a **P1/P2**, a `warning` alert (more than 5% errors) a **P3/P4**.
 
-Who may decide is ServiceNow's call, not Sentinel's: a Slack click on a change counts only if
-ServiceNow is waiting on **that person's** approval. Sentinel reads the clicker's email from
-Slack (`users:read.email`), finds the matching ServiceNow user, and records their approval or
-rejection on their own approval request ("Approved in Slack by ..., via Sentinel"). Anyone
-else gets a private "you're not an approver" reply and nothing is recorded. A rejection
-cancels the change. When the alert clears, the incident is resolved ("Workaround provided")
-and a change nobody decided on is cancelled. The rollback itself is still simulated until a
-deploy tool is connected (Part 2, Step D).
+| Situation | Ticket | Who approves | What runs |
+|---|---|---|---|
+| **Roll back** a bad release | **None new**: it is the backout of the release's own change | Someone in the ServiceNow **on-call group** (`ShopLite On-Call`), one click | Harness redeploys the previous version as "Backout of CHG..." |
+| **Fix**, P1/P2 | **Emergency** change | On call clicks **Deploy fix now**; the **ECAB reviews afterwards** | Harness deploys the fix right away, then the change goes to the ECAB |
+| **Fix**, P3/P4 | **Normal** change | **Change Management**, then the **CAB**, before anything deploys | Harness deploys once the CAB approves |
+| **Release** | **Normal** change (`make release-change`) | Change Management, then the CAB, in ServiceNow | `make deploy VERSION=... CHANGE=CHG...` |
 
-Needs `SERVICENOW_INSTANCE_URL`, `SERVICENOW_USERNAME` and `SERVICENOW_PASSWORD` in `.env`
-(optional `SERVICENOW_CHANGE_GROUP`). The integration user needs the `itil` role, plus
-`approval_admin` so it can record an approval on an approver's behalf. ServiceNow trouble
-never affects the incident (logged as `servicenow failed`); a click that can't be verified is
-refused, never recorded unverified.
+**Rollback.** Every deploy records the change it ran under (`logs/deploys.log`). The rollback
+target and the change it backs out both come from that history, not the AI. Sentinel notes
+"Backed out by incident #N" on the release's change and on the incident.
 
-Instance quirks learned the hard way: change state changes must go through the Change
-Management API (`/api/sn_chg_rest/change/...`), as the Table API is blocked by a
-state-transition rule; moving to *Authorize* needs an assignment group; on this instance the
-emergency CAB is the `CAB Approval` group.
+**Fix.** An engineer ships a fix version and runs `make fix VERSION=0.2.1 INCIDENT=7`. Sentinel
+raises the change the priority calls for, links it to the incident, and posts a message with
+the right buttons. Approvals are ServiceNow's call: a click counts only if ServiceNow is waiting
+on **that person** (matched by their Slack email), and it is recorded under their own name.
+Anyone else gets a private "you're not an approver" reply. A normal change moves itself from
+Change Management to the CAB, then to *Scheduled*; Sentinel deploys, checks, and closes it. An
+emergency change is closed after the ECAB review with "implemented as an emergency fix before
+review".
 
-## Harness (real rollback after CAB approval)
+**Validation.** After any rollback or fix, Sentinel checks that the version's error rate stays
+under 5% for 2 minutes, then says "validated" in Slack and on the incident. If it doesn't
+settle, a person is asked to check.
 
-When a CAB approver approves the change, the rollback really happens. Sentinel takes the
-target from the deploy history (the version that ran before the bad one, not the AI's word),
-moves the change to *Implement*, runs the Harness `shoplite_deploy` pipeline with that version,
-watches it, and closes the change as *successful* (with the Harness run link) or
-*unsuccessful*. Slack shows each step in the incident's thread and message. If there's no known
-previous version or Harness won't start, nothing is deployed, the change is cancelled or
-closed as unsuccessful, and Slack says a person must take over.
+**Safety.** The AI has no write access to anything. Harness runs only after a verified human
+click. ServiceNow trouble never breaks incident handling (logged as `servicenow failed`), and a
+click that can't be verified is refused, never recorded unverified.
 
-Real rollbacks need both Harness (`HARNESS_ACCOUNT_ID`, `HARNESS_API_KEY`) and ServiceNow:
-without a ServiceNow-verified approval, rollbacks stay simulated. Optional settings:
-`HARNESS_ORG`, `HARNESS_PROJECT`, `HARNESS_PIPELINE`, `DEPLOY_LOG_PATH`. Setup: deploy/README.md.
+**Settings.** `SERVICENOW_INSTANCE_URL`, `SERVICENOW_USERNAME`, `SERVICENOW_PASSWORD`; optional
+`SERVICENOW_CHANGE_GROUP` (default `Change Management`) and `SERVICENOW_ONCALL_GROUP` (default
+`ShopLite On-Call`). The integration user needs `itil` and `approval_admin` (to record an
+approval on an approver's behalf). Harness: `HARNESS_ACCOUNT_ID`, `HARNESS_API_KEY`; optional
+`HARNESS_ORG`, `HARNESS_PROJECT`, `HARNESS_PIPELINE`, `DEPLOY_LOG_PATH`. Without both ServiceNow
+and Harness, a rollback approval is only simulated. Setup: deploy/README.md.
+
+**Instance quirks learned the hard way.** State changes must go through the Change Management
+API (`/api/sn_chg_rest/change/...`); the Table API is blocked by a state-transition rule.
+Moving to *Assess* or *Authorize* needs an assignment group. On this instance the CAB (and the
+emergency CAB) is the `CAB Approval` group, and normal changes ask `Change Management` first.
+Demo data reuses change numbers, so Sentinel looks changes up by record ID.
 
 ## Measuring the AI + human loop
 

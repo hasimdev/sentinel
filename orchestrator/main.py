@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Response
 from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, generate_latest
+from pydantic import BaseModel
 
 from common.logging_setup import configure_logging
 from mcp_server.tools import make_toolbox
@@ -16,11 +17,16 @@ from orchestrator.adapters.loki import LokiLogSource
 from orchestrator.adapters.prometheus import PrometheusMetricSource
 from orchestrator.adapters.ticketing import JiraTicketing, Ticketing
 from orchestrator.insights import IncidentMetrics
-from orchestrator.models import AlertmanagerWebhook, Incident
-from orchestrator.service import IncidentService, WebhookResult
+from orchestrator.models import AlertmanagerWebhook, FixDeploy, Incident
+from orchestrator.service import FixRefused, IncidentService, WebhookResult
 from orchestrator.settings import Settings, load_settings
 from orchestrator.store import IncidentStore
 from orchestrator.triage import TriageAgent
+
+
+class FixRequest(BaseModel):
+    version: str
+    requested_by: str = "an engineer"
 
 
 def create_app(
@@ -147,6 +153,15 @@ def create_app(
         if incident is None:
             raise HTTPException(status_code=404, detail="Incident not found")
         return incident
+
+    @app.post("/incidents/{incident_id}/fix")
+    def request_fix(incident_id: int, request: FixRequest) -> FixDeploy:
+        """An engineer has a fix version ready (`make fix`). Sentinel raises the change its
+        priority calls for and asks the right people in Slack. Nothing deploys until they do."""
+        try:
+            return service.request_fix(incident_id, request.version, request.requested_by)
+        except FixRefused as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     log.info("orchestrator started")
     return app

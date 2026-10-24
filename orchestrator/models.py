@@ -98,6 +98,38 @@ class RollbackRun(BaseModel):
     validated_at: datetime | None = None
 
 
+class FixDeploy(BaseModel):
+    """Deploying a fix version for an incident, under a change chosen by priority.
+
+    P1/P2 -> emergency change: deployed as soon as someone on call clicks, then the ECAB
+    reviews it afterwards. P3/P4 -> normal change: Change Management, then the CAB, approve
+    it first; then it deploys.
+    """
+
+    version: str
+    change_type: Literal["emergency", "normal"]
+    priority: Literal["P1/P2", "P3/P4"]
+    change: RecordRef | None = None
+    stage: Literal[
+        "awaiting_deploy",  # emergency: waiting for the on-call click
+        "awaiting_approval",  # normal: waiting for Change Management, then the CAB
+        "deploying",
+        "awaiting_review",  # emergency: deployed; the ECAB reviews it afterwards
+        "done",
+        "rejected",
+        "failed",
+    ]
+    requested_by: str
+    requested_at: datetime
+    approvals: list[str] = Field(default_factory=list)  # e.g. "Abu Ansari (CAB)"
+    deployed_by: str | None = None
+    run_url: str | None = None
+    deployed_at: datetime | None = None
+    validation: Literal["checking", "validated", "not_validated"] | None = None
+    chat: ChatRef | None = None  # the fix's own Slack message
+    note: str | None = None  # what happened last, in plain words
+
+
 class Decision(BaseModel):
     action: Literal["approved", "rejected"]
     recommendation: str | None = None  # what the AI recommended at the time
@@ -129,4 +161,5 @@ class Incident(BaseModel):
     followup: TicketRef | None = None  # the ticket to fix the root cause properly
     itsm_incident: RecordRef | None = None  # the incident record in ServiceNow
     change: RecordRef | None = None  # emergency change raised when the AI recommends rollback
-    rollback: RollbackRun | None = None  # the real rollback, once a CAB approver approved
+    rollback: RollbackRun | None = None  # the real rollback, once someone on call approved
+    fix: FixDeploy | None = None  # deploying a fix version under a change

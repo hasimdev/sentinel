@@ -15,6 +15,7 @@ from orchestrator.adapters.base import AdapterError
 from orchestrator.models import RecordRef
 
 # ServiceNow state codes (Change Management API and the incident table).
+CHANGE_ASSESS = "-4"
 CHANGE_AUTHORIZE = "-3"
 CHANGE_IMPLEMENT = "-1"
 CHANGE_REVIEW = "0"
@@ -27,6 +28,17 @@ RESOLVE_CODE = "Workaround provided"
 _EMAIL = re.compile(r"^[^\s@^,=]+@[^\s@^,=]+$")  # no ServiceNow query characters
 _NAME = re.compile(r"^[A-Za-z0-9 ._-]{1,80}$")  # a group name, safe inside a query
 _CHANGE = re.compile(r"^CHG\d{7}$")
+# Change states by ServiceNow code, in plain words.
+CHANGE_STATES = {
+    "-5": "new",
+    "-4": "assess",
+    "-3": "authorize",
+    "-2": "scheduled",
+    "-1": "implement",
+    "0": "review",
+    "3": "closed",
+    "4": "canceled",
+}
 
 
 class NewIncident(BaseModel):
@@ -56,8 +68,11 @@ class ChangeMgmt(Protocol):
     def add_note(self, record: RecordRef, text: str) -> None: ...
     def resolve_incident(self, record: RecordRef, notes: str) -> None: ...
     def create_emergency_change(self, new: NewChange) -> RecordRef: ...
+    def create_normal_change(self, new: NewChange) -> RecordRef: ...
     def link_change(self, incident: RecordRef, change: RecordRef) -> None: ...
+    def request_assessment(self, change: RecordRef) -> None: ...
     def request_approval(self, change: RecordRef) -> None: ...
+    def change_state(self, change: RecordRef) -> str: ...
     def pending_approver(self, change: RecordRef, email: str) -> Approver | None: ...
     def group_member(self, email: str, group: str) -> str | None: ...
     def find_change(self, number: str) -> RecordRef | None: ...
@@ -111,18 +126,28 @@ class ServiceNowChangeMgmt:
         body = {"state": INCIDENT_RESOLVED, "close_code": RESOLVE_CODE, "close_notes": notes}
         self._call("PATCH", f"/api/now/table/incident/{record.sys_id}", json=body)
 
-    # --- emergency changes ---
+    # --- changes (emergency for P1/P2 fixes, normal for P3/P4 fixes) ---
 
     def create_emergency_change(self, new: NewChange) -> RecordRef:
         result = self._call("POST", "/api/sn_chg_rest/change/emergency", json=new.model_dump())
+        return self._ref("change_request", result)
+
+    def create_normal_change(self, new: NewChange) -> RecordRef:
+        result = self._call("POST", "/api/sn_chg_rest/change/normal", json=new.model_dump())
         return self._ref("change_request", result)
 
     def link_change(self, incident: RecordRef, change: RecordRef) -> None:
         """A work note on each record naming the other. (The incident's "Change Request"
         field isn't visible to an itil user on every instance, and ServiceNow silently
         ignores fields it can't see, so a note is the link that always works.)"""
-        self.add_note(incident, f"Emergency change {change.number} raised for this incident.")
+        self.add_note(incident, f"Change {change.number} raised for this incident.")
         self.add_note(change, f"Raised for incident {incident.number}.")
+
+    def request_assessment(self, change: RecordRef) -> None:
+        """Normal change: move to Assess; ServiceNow asks Change Management to review it.
+        Once they approve, ServiceNow moves it to Authorize and asks the CAB by itself."""
+        body = {"assignment_group": self._change_group_id(), "state": CHANGE_ASSESS}
+        self._call("PATCH", f"/api/sn_chg_rest/change/{change.sys_id}", json=body)
 
     def request_approval(self, change: RecordRef) -> None:
         """Move the change to Authorize; ServiceNow then asks the CAB to approve it.
@@ -132,6 +157,12 @@ class ServiceNowChangeMgmt:
         """
         body = {"assignment_group": self._change_group_id(), "state": CHANGE_AUTHORIZE}
         self._call("PATCH", f"/api/sn_chg_rest/change/{change.sys_id}", json=body)
+
+    def change_state(self, change: RecordRef) -> str:
+        """Where the change is now, in plain words: new, assess, authorize, scheduled, ..."""
+        result = self._call("GET", f"/api/sn_chg_rest/change/{change.sys_id}")
+        code = str(_value(result["state"])).split(".")[0]  # the API returns e.g. "-2.0"
+        return CHANGE_STATES.get(code, code)
 
     def group_member(self, email: str, group: str) -> str | None:
         """The name of the person with this email, if they belong to ServiceNow group `group`."""

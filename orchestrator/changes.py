@@ -1,4 +1,4 @@
-"""What Sentinel writes into ServiceNow: the incident, its notes, and the emergency change."""
+"""What Sentinel writes into ServiceNow: the incident, its notes, and a fix's change."""
 
 from orchestrator.adapters.change_mgmt import NewChange, NewIncident
 from orchestrator.models import Incident
@@ -50,29 +50,42 @@ def diagnosis_note(incident: Incident) -> str:
     return "\n".join(lines)
 
 
-def rollback_change(incident: Incident) -> NewChange:
-    diagnosis = incident.triage.diagnosis
-    service, version = incident.service, incident.version
+def fix_change(incident: Incident, version: str, emergency: bool) -> NewChange:
+    """The change for deploying fix `version`: emergency for P1/P2, normal for P3/P4."""
+    diagnosis = incident.triage.diagnosis if incident.triage else None
+    service = incident.service
+    if emergency:
+        kind = "Emergency"
+        process = (
+            "P1/P2 incident: an emergency change. It is deployed as soon as someone on call "
+            "approves in Slack, then goes to the ECAB for review afterwards."
+        )
+    else:
+        kind = "Normal"
+        process = (
+            "P3/P4 incident: a normal change. Change Management and then the CAB approve it "
+            "before anything is deployed."
+        )
+    cause = (
+        f"AI diagnosis ({diagnosis.confidence} confidence): {diagnosis.likely_cause}"
+        if diagnosis
+        else "No AI diagnosis on record."
+    )
     return NewChange(
         short_description=(
-            f"Emergency rollback of {service} {version} (Sentinel incident #{incident.id})"
+            f"{kind} fix: deploy {service} {version} (Sentinel incident #{incident.id})"
         ),
         description=(
-            f"Roll back {service} in {incident.env} from version {version} "
-            f"(commit {incident.commit_sha}) to the previous good release.\n\n"
-            f"Raised automatically by Sentinel because the AI recommends a rollback. "
-            f"It needs CAB approval; nothing is deployed until a person approves."
+            f"Deploy {service} {version} in {incident.env} to fix the problem in release "
+            f"{incident.version} (commit {incident.commit_sha}).\n\n{process}"
         ),
-        justification=(
-            f"AI diagnosis ({diagnosis.confidence} confidence): {diagnosis.likely_cause}\n"
-            f"{diagnosis.reasoning}"
-        ),
+        justification=cause,
         implementation_plan=(
-            f"Redeploy the previous {service} release with the standard deploy pipeline. "
-            "Watch the error rate on the dashboard."
+            f"Deploy {service} {version} with the Harness pipeline. Sentinel checks the error "
+            "rate stays under 5% for 2 minutes afterwards."
         ),
-        backout_plan=f"Redeploy version {version} if the rollback makes things worse.",
-        test_plan="Error rate back under 5% and the alert clears within 5 minutes.",
+        backout_plan="Roll back to the last good version with the Harness pipeline.",
+        test_plan="Error rate under 5% for 2 minutes after the deploy; the alert stays clear.",
     )
 
 

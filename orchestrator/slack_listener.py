@@ -9,7 +9,13 @@ import logging
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
-from orchestrator.messages import APPROVE_ACTION, REJECT_ACTION
+from orchestrator.messages import (
+    APPROVE_ACTION,
+    CHANGE_APPROVE_ACTION,
+    CHANGE_REJECT_ACTION,
+    FIX_DEPLOY_ACTION,
+    REJECT_ACTION,
+)
 from orchestrator.service import NotAllowed
 
 
@@ -44,6 +50,26 @@ def handle_click(service, body: dict, email: str | None = None) -> str | None:
     return None
 
 
+FIX_ACTIONS = {
+    FIX_DEPLOY_ACTION: "deploy",
+    CHANGE_APPROVE_ACTION: "approve",
+    CHANGE_REJECT_ACTION: "reject",
+}
+
+
+def handle_fix_click(service, body: dict, email: str | None = None) -> str:
+    """A click on a fix's message (deploy now, or approve/reject its change). Returns the
+    note for the clicker: what happened, or why nothing did."""
+    action = body["actions"][0]
+    incident_id = int(action["value"])
+    user = body.get("user", {})
+    user_name = user.get("name") or user.get("username") or user.get("id", "unknown")
+    try:
+        return service.fix_click(incident_id, FIX_ACTIONS[action["action_id"]], user_name, email)
+    except NotAllowed as exc:
+        return str(exc)
+
+
 def start_socket_mode(bot_token: str, app_token: str, service, log: logging.Logger):
     """Connect to Slack in the background. Returns the handler (call .close() on shutdown)."""
     bolt = App(token=bot_token, logger=log)
@@ -56,8 +82,15 @@ def start_socket_mode(bot_token: str, app_token: str, service, log: logging.Logg
                 channel=body["channel"]["id"], user=body["user"]["id"], text=note
             )
 
+    def on_fix_click(ack, body, client):
+        ack()
+        note = handle_fix_click(service, body, clicker_email(client, body["user"]["id"]))
+        client.chat_postEphemeral(channel=body["channel"]["id"], user=body["user"]["id"], text=note)
+
     bolt.action(APPROVE_ACTION)(on_click)
     bolt.action(REJECT_ACTION)(on_click)
+    for fix_action in FIX_ACTIONS:
+        bolt.action(fix_action)(on_fix_click)
     # "View dashboard" is a link button; Slack still reports the click, so acknowledge it.
     bolt.action("sentinel_dashboard")(lambda ack: ack())
 

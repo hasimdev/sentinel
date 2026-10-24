@@ -173,3 +173,90 @@ def incident_message(incident: Incident, dashboard_url: str) -> tuple[str, list[
         }
     )
     return text, blocks
+
+
+# --- a fix deployed under a change ---
+
+FIX_DEPLOY_ACTION = "sentinel_fix_deploy"
+CHANGE_APPROVE_ACTION = "sentinel_change_approve"
+CHANGE_REJECT_ACTION = "sentinel_change_reject"
+
+FIX_PROCESS = {
+    "emergency": "P1/P2, so an emergency change: deploys as soon as someone on call approves; "
+    "the ECAB reviews it afterwards.",
+    "normal": "P3/P4, so a normal change: Change Management, then the CAB, approve it before "
+    "it deploys.",
+}
+FIX_STAGES = {
+    "awaiting_deploy": ":rotating_light: Waiting for someone on call to deploy the fix",
+    "awaiting_approval": ":hourglass_flowing_sand: Waiting for approval",
+    "deploying": ":arrows_counterclockwise: Deploying with Harness",
+    "awaiting_review": ":eyes: Deployed. Waiting for the ECAB review",
+    "done": ":white_check_mark: Done: change closed",
+    "rejected": ":x: Rejected: nothing deployed",
+    "failed": ":x: Failed: a person needs to take over",
+}
+
+
+def fix_message(incident: Incident) -> tuple[str, list[dict]]:
+    fix = incident.fix
+    change = fix.change
+    number = f"<{change.url}|{change.number}>" if change else "no change record"
+    text = f"Fix for incident #{incident.id}: deploy {incident.service} {fix.version}"
+    blocks: list[dict] = [
+        {"type": "header", "text": {"type": "plain_text", "text": _cut(text, 150)}},
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": (
+                    f"*{fix.change_type.title()} change {number}*\n"
+                    f"{FIX_PROCESS[fix.change_type]}\n"
+                    f"Requested by {fix.requested_by} at {_time(fix.requested_at)}."
+                ),
+            },
+        },
+    ]
+    buttons = []
+    if fix.stage == "awaiting_deploy":
+        buttons.append(_button(FIX_DEPLOY_ACTION, "Deploy fix now", incident.id, primary=True))
+    elif fix.stage in ("awaiting_approval", "awaiting_review"):
+        label = "Approve (ECAB review)" if fix.stage == "awaiting_review" else "Approve change"
+        buttons += [
+            _button(CHANGE_APPROVE_ACTION, label, incident.id, primary=True),
+            _button(CHANGE_REJECT_ACTION, "Reject", incident.id),
+        ]
+    if buttons:
+        blocks.append({"type": "actions", "elements": buttons})
+    lines = [FIX_STAGES[fix.stage]]
+    if fix.approvals:
+        lines.append("Approved by: " + ", ".join(fix.approvals))
+    if fix.run_url:
+        by = f" by {fix.deployed_by}" if fix.deployed_by else ""
+        lines.append(f"<{fix.run_url}|Harness run>{by}")
+    if fix.validation:
+        lines.append(
+            {
+                "checking": "Checking the error rate is back to normal",
+                "validated": ":white_check_mark: Validated: errors stayed under 5%",
+                "not_validated": ":warning: Not validated: a person should check",
+            }[fix.validation]
+        )
+    if fix.note:
+        lines.append(fix.note)
+    blocks.append(
+        {"type": "context", "elements": [{"type": "mrkdwn", "text": _cut(x)} for x in lines]}
+    )
+    return text, blocks
+
+
+def _button(action_id: str, label: str, incident_id: int, primary: bool = False) -> dict:
+    button = {
+        "type": "button",
+        "action_id": action_id,
+        "text": {"type": "plain_text", "text": label},
+        "value": str(incident_id),
+    }
+    if primary:
+        button["style"] = "primary"
+    return button

@@ -17,9 +17,9 @@ from orchestrator.adapters.change_mgmt import (
     NewIncident,
     ServiceNowChangeMgmt,
 )
-from orchestrator.changes import diagnosis_note, resolution_notes, rollback_change
+from orchestrator.changes import diagnosis_note, fix_change, resolution_notes
 from orchestrator.main import create_app
-from orchestrator.messages import APPROVE_ACTION, REJECT_ACTION, incident_message
+from orchestrator.messages import APPROVE_ACTION, incident_message
 from orchestrator.models import (
     ChatRef,
     Decision,
@@ -243,104 +243,19 @@ def test_without_a_deploy_tool_a_rollback_click_is_simulated_for_anyone(tmp_path
     assert "group_member" not in snow.names() and "pending_approver" not in snow.names()
 
 
-# --- deciding on a change that needs approval: only a person ServiceNow asked may decide ---
-# (Changes that need approval come with deploying a fix; here one is attached directly.)
-
-
-def with_change(client):
-    store = client.app.state.service.store
-    inc = store.get(1)
-    inc.change = ref("change_request", "CHG0030005")
-    store.save(inc)
-
-
-def raise_and_attach(tmp_path, snow):
-    client = orchestrator(tmp_path, snow)
-    client.post("/alerts", json=alert("firing"))
-    with_change(client)
-    return client
-
-
-def test_cab_approver_click_is_recorded_in_servicenow_under_their_name(tmp_path):
-    snow = FakeServiceNow()
-    client = raise_and_attach(tmp_path, snow)
-    assert click(client) is None
-    assert ("pending_approver", "CHG0030005", APPROVER_EMAIL) in snow.calls
-    assert ("record_approval", "Abu Ansari", True, "Approved in Slack by abu, via Sentinel.") in (
-        snow.calls
-    )
-    decision = incident(client)["decision"]
-    assert decision["action"] == "approved"
-    assert "CAB approver Abu Ansari" in decision["outcome"] and "CHG0030005" in decision["outcome"]
-    assert "cancel_change" not in snow.names()
-    assert snow.calls[-1][0] == "add_note" and "Abu Ansari" in snow.calls[-1][2]
-
-
-def test_someone_servicenow_did_not_ask_cannot_decide(tmp_path):
-    snow = FakeServiceNow()
-    client = raise_and_attach(tmp_path, snow)
-    note = click(client, email="someone.else@example.com")
-    assert "not an approver for CHG0030005" in note
-    assert incident(client)["decision"] is None
-    assert "record_approval" not in snow.names()
-    assert click(client) is None  # a real approver can still decide afterwards
-
-
-def test_reject_by_cab_approver_cancels_the_change(tmp_path):
-    snow = FakeServiceNow()
-    client = raise_and_attach(tmp_path, snow)
-    assert click(client, REJECT_ACTION) is None
-    assert ("record_approval", "Abu Ansari", False, "Rejected in Slack by abu, via Sentinel.") in (
-        snow.calls
-    )
-    assert "cancel_change" in snow.names()
-    assert "CHG0030005 was cancelled" in incident(client)["decision"]["outcome"]
-
-
-def test_click_without_an_email_is_refused(tmp_path):
-    client = raise_and_attach(tmp_path, FakeServiceNow())
-    assert "couldn't read your email" in click(client, email=None)
-    assert incident(client)["decision"] is None
-
-
-@pytest.mark.parametrize("failing", ["pending_approver", "record_approval"])
-def test_servicenow_trouble_while_deciding_records_nothing(tmp_path, failing):
-    client = raise_and_attach(tmp_path, FakeServiceNow(fail=[failing]))
-    note = click(client)
-    assert "Nothing was recorded" in note and "try again" in note
-    assert incident(client)["decision"] is None
-
-
-def test_second_click_does_not_touch_servicenow_again(tmp_path):
-    snow = FakeServiceNow()
-    client = raise_and_attach(tmp_path, snow)
-    click(client)
-    before = len(snow.calls)
-    assert "already decided" in click(client, REJECT_ACTION)
-    assert len(snow.calls) == before
-
-
 # --- resolving ---
 
 
-def test_resolve_closes_incident_and_cancels_an_undecided_change(tmp_path):
+def test_resolve_closes_the_servicenow_incident_with_the_story(tmp_path):
     snow = FakeServiceNow()
-    client = raise_and_attach(tmp_path, snow)
+    client = orchestrator(tmp_path, snow)
+    client.post("/alerts", json=alert("firing"))
+    click(client, email=None)
     client.post("/alerts", json=alert("resolved"))
-    cancel = next(c for c in snow.calls if c[0] == "cancel_change")
-    assert "before anyone approved" in cancel[2]
     resolve = next(c for c in snow.calls if c[0] == "resolve_incident")
     assert resolve[1] == "INC0010002" and "Alert cleared at 2026-10-16 10:09 UTC" in resolve[2]
-
-
-def test_resolve_after_approval_keeps_the_change(tmp_path):
-    snow = FakeServiceNow()
-    client = raise_and_attach(tmp_path, snow)
-    click(client)
-    client.post("/alerts", json=alert("resolved"))
-    assert "cancel_change" not in snow.names()
-    resolve = next(c for c in snow.calls if c[0] == "resolve_incident")
     assert "Decision in Slack: approved by abu" in resolve[2]
+    assert "cancel_change" not in snow.names()
 
 
 # --- what gets written ---
@@ -362,14 +277,17 @@ def sample_incident(**overrides):
     return Incident(**{**base, **overrides})
 
 
-def test_change_names_version_commit_and_ai_reasoning():
-    change = rollback_change(sample_incident())
-    assert change.short_description == (
-        "Emergency rollback of shoplite 0.2.0 (Sentinel incident #7)"
+def test_fix_change_says_which_process_applies():
+    emergency = fix_change(sample_incident(), "0.2.1", emergency=True)
+    assert emergency.short_description == (
+        "Emergency fix: deploy shoplite 0.2.1 (Sentinel incident #7)"
     )
-    assert "commit e8f12b0" in change.description and "CAB approval" in change.description
-    assert "KeyError in promo_price" in change.justification
-    assert "0.2.0" in change.backout_plan
+    assert "release 0.2.0 (commit e8f12b0)" in emergency.description
+    assert "ECAB for review afterwards" in emergency.description
+    assert "KeyError in promo_price" in emergency.justification
+    normal = fix_change(sample_incident(), "0.2.1", emergency=False)
+    assert normal.short_description.startswith("Normal fix")
+    assert "Change Management and then the CAB" in normal.description
 
 
 def test_diagnosis_note_lists_evidence_and_says_when_missing():
@@ -534,7 +452,7 @@ def test_link_puts_a_note_on_each_record_naming_the_other():
         "/api/now/table/incident/id-INC1",
         "/api/now/table/change_request/id-CHG0030005",
     ]
-    assert body(seen[0]) == {"work_notes": "Emergency change CHG0030005 raised for this incident."}
+    assert body(seen[0]) == {"work_notes": "Change CHG0030005 raised for this incident."}
     assert body(seen[1]) == {"work_notes": "Raised for incident INC1."}
 
 

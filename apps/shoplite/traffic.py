@@ -31,14 +31,22 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--rps", type=float, default=5.0, help="requests per second")
     parser.add_argument("--seconds", type=float, default=0, help="0 = run until Ctrl+C")
+    parser.add_argument(
+        "--checkout-share",
+        type=float,
+        default=0.75,
+        help="share of requests that are checkouts (0-1); fewer checkouts = a milder outage",
+    )
     args = parser.parse_args()
+    if not 0 <= args.checkout_share <= 1:
+        parser.error("--checkout-share must be between 0 and 1")
 
     statuses: Counter[int] = Counter()
     started = time.monotonic()
     print(f"Sending ~{args.rps:g} req/s to http://{args.host}:{args.port} (Ctrl+C to stop)")
     try:
         while not args.seconds or time.monotonic() - started < args.seconds:
-            if secrets.randbelow(4) == 0:
+            if secrets.randbelow(1000) >= args.checkout_share * 1000:
                 status = send(args.host, args.port, "GET", "/products")
             else:
                 body = {
