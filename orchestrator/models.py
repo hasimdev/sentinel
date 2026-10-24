@@ -163,3 +163,5 @@ class Incident(BaseModel):
     change: RecordRef | None = None  # emergency change raised when the AI recommends rollback
     rollback: RollbackRun | None = None  # the real rollback, once someone on call approved
     fix: FixDeploy | None = None  # deploying a fix version under a change
+    # One deploy at a time per incident: "rollback" or "fix" while one runs, else None.
+    deploy_in_progress: Literal["rollback", "fix"] | None = None

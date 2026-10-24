@@ -42,3 +42,6 @@ Thumbs.db
 .claude/hillclimb/**/state.json
 .claude/hillclimb/**/trajectory/
 .claude/hillclimb/**/harness_approval.json
+
+# Screenshots saved into the project folder (they can show names, emails or tokens)
+/Screenshot*.png

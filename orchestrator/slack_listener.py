@@ -42,6 +42,7 @@ def handle_click(service, body: dict, email: str | None = None) -> str | None:
     try:
         decision, already = service.decide(incident_id, verb, user_id, user_name, email)
     except NotAllowed as exc:
+        _log_refused(service, incident_id, user_name, exc)
         return str(exc)
     if decision is None:
         return f"Incident #{incident_id} no longer exists."
@@ -67,7 +68,14 @@ def handle_fix_click(service, body: dict, email: str | None = None) -> str:
     try:
         return service.fix_click(incident_id, FIX_ACTIONS[action["action_id"]], user_name, email)
     except NotAllowed as exc:
+        _log_refused(service, incident_id, user_name, exc)
         return str(exc)
+
+
+def _log_refused(service, incident_id: int, user_name: str, exc: NotAllowed) -> None:
+    """A refused click is worth a log line: it's how a "nothing happened" gets explained."""
+    fields = {"incident_id": incident_id, "clicked_by": user_name, "reason": str(exc)}
+    service.log.info("click refused", extra={"fields": fields})
 
 
 def start_socket_mode(bot_token: str, app_token: str, service, log: logging.Logger):

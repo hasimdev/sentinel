@@ -192,3 +192,29 @@ Running notes on what I learned at each step.
   Harness rolled back to 0.1.0 in **16 s** → change **Closed / Successful** with the run link
   → INC0010003 resolved 06:25 → Jira **SEN-3**. Human decision time: ~3 minutes; machine
   time after the click: ~1 minute.
+
+## 2026-10-24 – Part 3: the real change process
+- Rebuilt the change flow around how change management actually works (the user ran a CAB
+  for years): **a rollback needs no new ticket**. It is the backout of the change the
+  release went out under, so it only needs someone **on call** (checked in ServiceNow).
+- **Fixes** go out under the change their **priority** calls for, and priority comes from the
+  alert, never the AI: P1/P2 → **emergency** change, deployed on the on-call click and reviewed
+  by the **ECAB afterwards**; P3/P4 → **normal** change, approved by **Change Management, then
+  the CAB**, before anything deploys. Releases go out under a normal change too.
+- Every deploy records its change number, and Sentinel **validates** each rollback or fix:
+  errors under 5% for 2 minutes before it says "validated".
+- A **warning** alert (over 5% errors) creates P3 incidents; while the critical alert fires,
+  Alertmanager silences the warning, so one problem never opens two incidents.
+- Live run, all three paths: release 0.2.0 under CHG0030015 (CAB-approved) → incident #7 →
+  on-call click → rollback **backing out CHG0030015** in 27 s, validated. Then fix 0.2.1 under
+  emergency **CHG0030016**: deployed on the on-call click, validated, **ECAB reviewed
+  afterwards**, closed. Then a milder outage (P3, incident #8) → normal **CHG0030017** →
+  Change Management, then CAB → deployed, validated, closed.
+- **The live run found a real gap:** on incident #8 the rollback and the fix were both
+  approved at the same moment and two deploys ran at once. Both landed on the good version,
+  but that was luck. Now each incident allows **one deploy at a time**; a second deploy click
+  is refused until the first finishes (and validation is part of "finished").
+- Small lessons: a first click that seemed to "do nothing" was answered with a private note
+  that wasn't logged. Refused clicks are now logged. Harness offered no "Project Member" role
+  this time, so the pipeline edit used Project Admin for two minutes, then removed and
+  re-checked (403).

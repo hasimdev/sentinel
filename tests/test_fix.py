@@ -349,3 +349,40 @@ def test_release_change_is_a_normal_change_that_the_rollback_will_back_out():
     assert change.short_description == "Release: deploy shoplite 0.2.0"
     assert "Change Management, then the CAB" in change.description
     assert "backs out this change" in change.backout_plan
+
+
+# --- one deploy at a time per incident ---
+
+
+def set_busy(client, kind):
+    store = client.app.state.service.store
+    incident = store.get(1)
+    incident.deploy_in_progress = kind
+    store.save(incident)
+
+
+def test_emergency_fix_waits_while_a_rollback_is_running(world):
+    client, _, harness, _ = world("critical")
+    request_fix(client)
+    set_busy(client, "rollback")
+    note = press(client, FIX_DEPLOY_ACTION)
+    assert "A rollback is already running" in note
+    assert harness.started == [] and fix(client)["stage"] == "awaiting_deploy"
+
+
+def test_cab_approval_waits_while_another_deploy_runs(world):
+    client, snow, harness, _ = world("warning")
+    request_fix(client)
+    press(client, CHANGE_APPROVE_ACTION)  # Change Management: nothing deploys yet
+    set_busy(client, "rollback")
+    note = press(client, CHANGE_APPROVE_ACTION)  # the CAB's approval would deploy
+    assert "A rollback is already running" in note
+    assert [c[0] for c in snow.calls].count("record_approval") == 1 and harness.started == []
+
+
+def test_the_deploy_slot_is_freed_when_a_deploy_ends(world):
+    client, _, harness, _ = world("critical")
+    request_fix(client)
+    press(client, FIX_DEPLOY_ACTION)
+    assert client.get("/incidents/1").json()["deploy_in_progress"] is None
+    assert len(harness.started) == 1

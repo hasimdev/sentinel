@@ -52,7 +52,9 @@ Deferred: web dashboard.
 | Rollback with no new ticket: backout of the release change, on-call approval, validation | Built |
 | Fixes by priority: P1/P2 emergency change (ECAB afterwards), P3/P4 normal change (CAB first) | Built |
 | Releases under a normal change; warning alert for P3/P4 | Built |
-| Live demo of every path, then the Part 2 post | Next |
+| One deploy at a time per incident (found in the live run) | Built |
+| Live demo of every path (rollback, emergency fix, normal fix) | Done |
+| Updated deck and the LinkedIn post | Next |
 
 ## Monitoring locally
 

@@ -135,7 +135,8 @@ class IncidentService:
         self.chat = chat
         self.dashboard_url = dashboard_url
         # Two people clicking at the same moment must not both get recorded.
-        self._decision_lock = threading.Lock()
+        # Re-entrant: a job started while the lock is held may take it again when it ends.
+        self._decision_lock = threading.RLock()
 
     def handle(self, webhook: AlertmanagerWebhook) -> WebhookResult:
         result = WebhookResult()
@@ -354,6 +355,8 @@ class IncidentService:
             )
             if recommendation == "rollback" and self.deploy_control is not None:
                 on_call = self._verify_on_call(incident, email, "decide on this rollback")
+                if approve:
+                    self._claim_deploy(incident, "rollback")
             incident.decision = Decision(
                 action="approved" if approve else "rejected",
                 recommendation=recommendation,
@@ -390,6 +393,12 @@ class IncidentService:
     def execute_rollback(self, incident_id: int) -> None:
         """Roll back through the deploy tool as the backout of the release's own change, then
         check the error rate is back to normal. Never raises."""
+        try:
+            self._execute_rollback(incident_id)
+        finally:
+            self._release_deploy(incident_id)
+
+    def _execute_rollback(self, incident_id: int) -> None:
         incident = self.store.get(incident_id)
         if (
             incident is None
@@ -585,6 +594,7 @@ class IncidentService:
                 if fix.stage != "awaiting_deploy":
                     raise NotAllowed(f"This fix isn't waiting to be deployed ({fix.stage}).")
                 on_call = self._verify_on_call(incident, email, "deploy this emergency fix")
+                self._claim_deploy(incident, "fix")
                 fix.stage, fix.deployed_by = "deploying", on_call
                 fix.note = f"Emergency fix deployed on {on_call}'s say-so, before ECAB review."
                 self.store.save(incident)
@@ -595,6 +605,8 @@ class IncidentService:
                     raise NotAllowed(f"This change isn't waiting for approval ({fix.stage}).")
                 approve = action == "approve"
                 before = self._change_state(incident, fix.change)
+                if approve and fix.stage == "awaiting_approval" and before == "authorize":
+                    self._check_deploy_free(incident)
                 approver = self._verify_approver(incident, fix.change, email)
                 verb = "Approved" if approve else "Rejected"
                 try:
@@ -637,6 +649,7 @@ class IncidentService:
                 return "ECAB review recorded; the change is closed."
             return "Approval recorded; the ECAB review continues."
         if state == "scheduled":
+            incident.deploy_in_progress = "fix"
             fix.stage, fix.note = "deploying", "Approved by the CAB. Deploying now."
             self.store.save(incident)
             self._background(lambda: self.deploy_fix(incident_id))
@@ -648,6 +661,12 @@ class IncidentService:
     def deploy_fix(self, incident_id: int) -> None:
         """Deploy the fix with Harness under its change, check it, then close or review the
         change. Never raises."""
+        try:
+            self._deploy_fix(incident_id)
+        finally:
+            self._release_deploy(incident_id)
+
+    def _deploy_fix(self, incident_id: int) -> None:
         incident = self.store.get(incident_id)
         fix = incident.fix if incident else None
         if fix is None or fix.stage != "deploying" or self.deploy_control is None:
@@ -786,6 +805,28 @@ class IncidentService:
                 healthy_since = None  # errors came back: start the clock again
             time.sleep(self.validate_poll_s)
         return False
+
+    # --- one deploy at a time per incident ---
+
+    def _check_deploy_free(self, incident: Incident) -> None:
+        busy = incident.deploy_in_progress
+        if busy:
+            raise NotAllowed(
+                f"A {busy} is already running for this incident, so nothing was recorded. "
+                "Try again when it finishes."
+            )
+
+    def _claim_deploy(self, incident: Incident, kind: str) -> None:
+        """Call with the lock held; the caller saves the incident."""
+        self._check_deploy_free(incident)
+        incident.deploy_in_progress = kind
+
+    def _release_deploy(self, incident_id: int) -> None:
+        with self._decision_lock:
+            incident = self.store.get(incident_id)
+            if incident is not None and incident.deploy_in_progress:
+                incident.deploy_in_progress = None
+                self.store.save(incident)
 
     def _find_change(self, incident: Incident, number: str | None) -> RecordRef | None:
         if number is None or self.change_mgmt is None:

@@ -145,6 +145,22 @@ def test_on_call_approval_backs_out_the_release_change_with_no_new_ticket(tmp_pa
     assert "backout of CHG0031001" in shown and "Rollback validated" in shown
 
 
+def test_rollback_waits_while_a_fix_deploys_and_the_refusal_is_logged(tmp_path, history, caplog):
+    harness = FakeHarness()
+    client = orchestrator(tmp_path, harness, history)
+    client.post("/alerts", json=alert("firing"))
+    store = client.app.state.service.store
+    incident = store.get(1)
+    incident.deploy_in_progress = "fix"
+    store.save(incident)
+    with caplog.at_level("INFO", logger="orchestrator"):
+        note = click(client)
+    assert "A fix is already running for this incident" in note
+    assert harness.started == [] and client.get("/incidents/1").json()["decision"] is None
+    refused = [r for r in caplog.records if r.getMessage() == "click refused"]
+    assert refused and refused[0].fields["reason"] == note
+
+
 def test_someone_not_on_call_cannot_approve_a_rollback(tmp_path, history):
     harness, snow = FakeHarness(), FakeServiceNow()
     client = orchestrator(tmp_path, harness, history, snow)
